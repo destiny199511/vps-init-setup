@@ -173,4 +173,8 @@ chmod +x vps_setup.sh
 echo "Starting VPS setup..."
 echo "Install directory: $INSTALL_DIR"
 # 默认进入交互模式，只有在需要无人值守安装时才传递 -n
-exec bash ./vps_setup.sh
+if [ -r /dev/tty ]; then
+    exec bash ./vps_setup.sh </dev/tty >/dev/tty 2>&1
+else
+    exec bash ./vps_setup.sh
+fi
