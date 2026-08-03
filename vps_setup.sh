@@ -723,18 +723,21 @@ for module in "${MODULES_TO_RUN[@]}"; do
         log_error "无法加载模块文件: $module_file"
         continue
     fi
-    
+
+    # 定位模块函数前缀，例如 00_preflight -> preflight
+    function_prefix="${name:3}"
+
     # 调用先决条件（如果存在）
-    if declare -f "${name}_prerequisites" > /dev/null; then
-        if ! "${name}_prerequisites"; then
+    if declare -f "${function_prefix}_prerequisites" > /dev/null; then
+        if ! "${function_prefix}_prerequisites"; then
             log_warn "模块 $name 的先决条件检查失败，跳过该模块。"
             continue
         fi
     fi
-    
+
     # 执行主函数
-    if declare -f "${name}_main" > /dev/null; then
-        if "${name}_main"; then
+    if declare -f "${function_prefix}_main" > /dev/null; then
+        if "${function_prefix}_main"; then
             state_set "$name" "done"
             log_info "模块 $name 执行成功"
         else
