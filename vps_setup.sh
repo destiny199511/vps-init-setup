@@ -3,7 +3,7 @@
 # VPS一键装机 — 生产级通用版 (带可视化配置界面)
 # 一行命令启动，随后进入可视化配置，完成后自动执行安装
 #
-# 依赖: whiptail (推荐) 或 dialog (备用)，用于交互式配置
+# 依赖: bash shell，用于命令行交互式配置
 # 核心库: core.sh (日志、状态、系统检测) 和 common.sh (配置管理)
 #
 
@@ -58,195 +58,118 @@ done
 
 # ===== 辅助函数 =====
 
-# 检查是否安装了 whiptail 或 dialog
-UI_TOOL="none"
-check_ui_tool() {
-    if command -v whiptail &>/dev/null; then
-        UI_TOOL="whiptail"
-    elif command -v dialog &>/dev/null; then
-        UI_TOOL="dialog"
+# 用户交互提示函数
+NON_INTERACTIVE=false
+prompt_or_default() {
+    local __var="$1" __prompt="$2" __default="$3" __env="${4:-$1}"
+    if [ "$NON_INTERACTIVE" = true ]; then
+        printf -v "$__var" '%s' "${!__env:-$__default}"
     else
-        UI_TOOL="none"
+        local answer
+        read -rp "$__prompt [$__default]: " answer
+        if [ -z "$answer" ]; then
+            answer="$__default"
+        fi
+        printf -v "$__var" '%s' "$answer"
     fi
 }
 
-# 使用啜饮显示消息框
 msg_box() {
     local title="$1"
     local text="$2"
-    local height=${3:-10}
-    local width=${4:-60}
-    
-    if [ "$UI_TOOL" = "whiptail" ]; then
-        whiptail --title "$title" --msgbox "$text" $height $width
-    elif [ "$UI_TOOL" = "dialog" ]; then
-        dialog --title "$title" --msgbox "$text" $height $width
-    else
-        echo "[$title]"
-        echo "$text"
-        echo
-    fi
+    echo
+    echo "=== $title ==="
+    echo "$text"
+    echo
 }
 
-# 是/否提示
 yesno_box() {
-    local title="$1"
-    local text="$2"
-    local height=${3:-10}
-    local width=${4:-60}
-    
-    if [ "$UI_TOOL" = "whiptail" ]; then
-        whiptail --title "$title" --yesno "$text" $height $width
-        return $?
-    elif [ "$UI_TOOL" = "dialog" ]; then
-        dialog --title "$title" --yesno "$text" $height $width
-        return $?
+    local prompt
+    if [ $# -eq 1 ]; then
+        prompt="$1"
     else
-        read -rp "$text (y/n): " answer
+        prompt="$2"
+    fi
+    local default="y"
+    local env_name=""
+    if [ $# -ge 3 ]; then
+        env_name="$3"
+    fi
+
+    if [ "$NON_INTERACTIVE" = true ]; then
+        local answer="${!env_name:-$default}"
         case "$answer" in
-            [Yy]*) return 0 ;;
+            [Yy1]|[Yy][eE][sS]) return 0 ;;
             *) return 1 ;;
         esac
+    else
+        local answer
+        while true; do
+            read -rp "$prompt [y/n] ($default): " answer
+            if [ -z "$answer" ]; then
+                answer="$default"
+            fi
+            case "$answer" in
+                [Yy]|[Yy][eE][sS]) return 0 ;;
+                [Nn]|[Nn][oO]) return 1 ;;
+                *) echo "请输入 y 或 n" ;;
+            esac
+        done
     fi
 }
 
-# 输入框
 input_box() {
     local title="$1"
     local prompt="$2"
     local default="$3"
-    local height=${4:-10}
-    local width=${5:-60}
-    
-    if [ "$UI_TOOL" = "whiptail" ]; then
-        result=$(whiptail --title "$title" --inputbox "$prompt" $height $width "$default" 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$result"
-        else
-            return 1
-        fi
-    elif [ "$UI_TOOL" = "dialog" ]; then
-        result=$(dialog --title "$title" --inputbox "$prompt" $height $width "$default" 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$result"
-        else
-            return 1
-        fi
-    else
-        read -rp "$prompt [$default]: " answer
-        if [ -z "$answer" ]; then
-            echo "$default"
-        else
-            echo "$answer"
-        fi
-    fi
+    local var
+    prompt_or_default var "$prompt" "$default"
+    printf '%s' "$var"
 }
 
-# 密码输入框（不显示输入）
 password_box() {
-    local title="$1"
-    local prompt="$2"
-    local height=${3:-10}
-    local width=${4:-60}
-    
-    if [ "$UI_TOOL" = "whiptail" ]; then
-        result=$(whiptail --title "$title" --passwordbox "$prompt" $height $width 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$result"
+    local prompt="$1"
+    local env_name="${2:-}"
+
+    if [ "$NON_INTERACTIVE" = true ]; then
+        if [ -n "$env_name" ]; then
+            printf '%s' "${!env_name:-}"
         else
-            return 1
-        fi
-    elif [ "$UI_TOOL" = "dialog" ]; then
-        result=$(dialog --title "$title" --passwordbox "$prompt" $height $width 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$result"
-        else
-            return 1
+            echo
         fi
     else
+        local password
         read -rsp "$prompt: " password
         echo
-        echo "$password"
+        printf '%s' "$password"
     fi
 }
 
-# 检查列表
-checklist() {
-    local title="$1"
-    local text="$2"
-    local height=${3:-15}
-    local width=${4:-60}
-    local list_height=${5:-10}
-    shift 5
-    local options=("$@")
-    
-    if [ "$UI_TOOL" = "whiptail" ]; then
-        choices=$(whiptail --title "$title" --checklist "$text" $height $width $list_height "${options[@]}" 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$choices"
-        else
-            return 1
-        fi
-    elif [ "$UI_TOOL" = "dialog" ]; then
-        choices=$(dialog --title "$title" --checklist "$text" $height $width $list_height "${options[@]}" 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$choices"
-        else
-            return 1
-        fi
-    else
-        echo "Checklist not supported in fallback mode. Please select all."
-        # 返回所有选项的状态为 ON
-        local result=""
-        for ((i=0; i<${#options[@]}; i+=2)); do
-            opt="${options[i]}"
-            result+="$opt ON "
-        done
-        echo "$result"
-    fi
-}
-
-# 菜单选择
 menu_select() {
     local title="$1"
-    local text="$2"
-    local height=${3:-15}
-    local width=${4:-60}
-    local list_height=${5:-10}
-    shift 5
+    local prompt="$2"
+    shift 2
     local options=("$@")
-    
-    if [ "$UI_TOOL" = "whiptail" ]; then
-        choice=$(whiptail --title "$title" --menu "$text" $height $width $list_height "${options[@]}" 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$choice"
-        else
-            return 1
-        fi
-    elif [ "$UI_TOOL" = "dialog" ]; then
-        choice=$(dialog --title "$title" --menu "$text" $height $width $list_height "${options[@]}" 3>&1 1>&2 2>&3)
-        exit_status=$?
-        if [ $exit_status -eq 0 ]; then
-            echo "$choice"
-        else
-            return 1
-        fi
+    if [ "$NON_INTERACTIVE" = true ]; then
+        printf '%s' "${options[0]}"
     else
-        echo "Menu not supported in fallback mode. Please choose manually."
-        # 简单列出选项并读取选择
-        PS3="请选择: "
-        select opt in "${options[@]}"; do
-            if [ -n "$opt" ]; then
-                echo "$opt"
-                break
+        echo "$prompt"
+        local index=1
+        for opt in "${options[@]}"; do
+            echo "  $index) $opt"
+            index=$((index + 1))
+        done
+        local choice
+        while true; do
+            read -rp "请选择 [1-$((index - 1))] (默认: 1): " choice
+            if [ -z "$choice" ]; then
+                choice=1
             fi
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$index" ]; then
+                printf '%s' "${options[choice-1]}"
+                return 0
+            fi
+            echo "请输入有效的数字。"
         done
     fi
 }
@@ -331,10 +254,11 @@ configure_ssh() {
         return 1
     fi
     
-    permit_root_login=$(menu_select "Root登录" "是否允许root通过SSH登录?" 15 50 3 "yes" "允许" "no" "禁止")
-    [ $? -ne 0 ] && return 1
-    # 转换为小写
-    permit_root_login=$(echo "$permit_root_login" | tr '[:upper:]' '[:lower:]')
+    if yesno_box "是否允许root通过SSH登录?"; then
+        permit_root_login="yes"
+    else
+        permit_root_login="no"
+    fi
     
     max_auth_tries=$(input_box "最大认证尝试次数" "请输入最大认证尝试次数 (默认: 3):" "${SSH_MAX_AUTH_TRIES:-3}")
     [ $? -ne 0 ] && ! validate_number "$max_auth_tries" && { msg_box "错误" "请输入有效数字"; return 1; }
@@ -484,7 +408,7 @@ configure_cleanup() {
 run_configuration_wizard() {
     local ret=0
     
-    msg_box "欢迎使用VPS一键装机" "欢迎使用VPS一键装机向导\\n\\n本向导将帮助您配置系统的各项参数。\\n请使用方向键导航，回车键确认，空格键选择/取消选择。"
+    msg_box "欢迎使用VPS一键装机" "欢迎使用VPS一键装机向导\n\n本向导将帮助您配置系统的各项参数。\n请按提示输入，回车以接受默认值。"
     
     # 系统设置
     if ! configure_system; then
@@ -609,7 +533,6 @@ fi
 
 # 如果是交互模式，运行向导
 if [ "$ACTION" = "install" ] && [ "$INTERACTIVE_MODE" = true ]; then
-    check_ui_tool
     if ! run_configuration_wizard; then
         log_error "配置向导失败，退出。"
         exit 1
