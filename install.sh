@@ -18,8 +18,8 @@ Environment variables:
 EOF
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/yourname/vps-init-setup.git}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
+REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
 INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
 REF="${VPS_INIT_SETUP_REF:-$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "latest") }"
 
@@ -98,8 +98,14 @@ resolve_release_tag() {
     if [ "$requested_ref" = "latest" ] || [ -z "$requested_ref" ]; then
         api_url="https://api.github.com/repos/${repo}/releases/latest"
         local release_json
-        release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url")"
-        printf '%s\n' "$release_json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
+        release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
+        local tag_name
+        tag_name="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name": *"\([^\"]*\)".*/\1/p' | head -n 1)"
+        if [ -n "$tag_name" ]; then
+            printf '%s\n' "$tag_name"
+        else
+            printf 'main\n'
+        fi
     else
         printf '%s\n' "$requested_ref"
     fi
@@ -118,17 +124,21 @@ resolve_download_url() {
         release_tag="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
     fi
 
-    if [ -n "$release_tag" ]; then
+    if [ -n "$release_tag" ] && [ "$release_tag" != "main" ] && [ "$release_tag" != "master" ]; then
         api_url="https://api.github.com/repos/${repo}/releases/tags/${release_tag}"
         release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
-        asset_url="$(printf '%s\n' "$release_json" | grep -o '"browser_download_url": "[^"]*"' | sed 's/.*"\([^"]*\)"/\1/' | grep -E 'vps-init-setup.*\.(tar\.gz|tgz)$' | head -n 1 || true)"
+        asset_url="$(printf '%s\n' "$release_json" | grep -o '"browser_download_url": "[^"]*"' | sed 's/.*"\([^\"]*\)"/\1/' | grep -E 'vps-init-setup.*\.(tar\.gz|tgz)$' | head -n 1 || true)"
         if [ -n "$asset_url" ]; then
             printf '%s\n' "$asset_url"
             return 0
         fi
     fi
 
-    printf 'https://github.com/%s/archive/refs/tags/%s.tar.gz\n' "$repo" "$release_tag"
+    if [ "$release_tag" = "main" ] || [ "$release_tag" = "master" ] || [ -z "$release_tag" ]; then
+        printf 'https://github.com/%s/archive/refs/heads/%s.tar.gz\n' "$repo" "$release_tag"
+    else
+        printf 'https://github.com/%s/archive/refs/tags/%s.tar.gz\n' "$repo" "$release_tag"
+    fi
 }
 
 if [ -f "$SCRIPT_DIR/vps_setup.sh" ]; then
