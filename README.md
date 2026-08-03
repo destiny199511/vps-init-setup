@@ -4,36 +4,118 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 [![Shell](https://img.shields.io/badge/shell-bash%20%2F%20sh-grey)]()
 
-吸收 `du_setup`、`linux-ssh-init-sh`、`server_init_harden` 三大开源 VPS 装机脚本的实践精华，以模块化、幂等、可回滚为设计理念，提供终端可视化配置向导的一键 VPS 初始化方案。
+VPS 一键装机是一个面向 Linux VPS 的自动化初始化工具，旨在帮助用户在新的服务器上快速完成基础环境配置、安全加固、服务安装和日常运维准备。
 
-用户只需一行命令即可进入交互式配置界面，通过方向键和回车完成主机名、用户、SSH、安全、服务等全部选项的配置，配置完成自动执行安装。
+该项目参考了 `du_setup`、`linux-ssh-init-sh` 和 `server_init_harden` 的实践经验，采用模块化、幂等和可回滚的设计思路，提供交互式向导与无人值守两种使用方式。
+
+## 项目概览
+
+- 支持 Ubuntu、Debian、CentOS、Rocky 与 AlmaLinux 等主流发行版
+- 自动检测系统环境、包管理器和初始化系统
+- 提供交互式配置向导与非交互式执行模式
+- 采用模块化结构，支持按需安装和分步执行
+- 对关键配置修改提供日志记录、备份与回滚能力
 
 ## 快速开始
 
+### 1. 安装
+
+安装脚本会优先尝试从发布资源获取；若资源不可用，则自动回退到源码包。
+
 ```bash
-# 交互式向导（一行命令，可视化配置 UI）
+curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+```
+
+如需安装指定版本，可以显式指定版本标签：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash -s -- --ref v1.0.0
+```
+
+
+### 2. 本地运行
+
+```bash
+# 交互式向导
 sudo ./vps_setup.sh
 
-# 无人值守安装（使用已有配置或默认值）
+# 无人值守安装
 sudo ./vps_setup.sh -n
 
-# 指定模块安装
+# 仅执行指定模块
 sudo ./vps_setup.sh -n --modules 05_ssh,06_firewall
 
-# 预览模式（不实际执行，查看将做什么）
+# 预览将要执行的操作
 sudo ./vps_setup.sh -n -d
 
-# 查看各模块执行状态
+# 查看模块执行状态
 sudo ./vps_setup.sh --status
 
-# 强制重做已完成的模块
+# 强制重新执行已完成的模块
 sudo ./vps_setup.sh -f -n
 
-# 回滚已完成的更改
+# 回滚已完成的变更
 sudo ./vps_setup.sh --rollback
 
-# 查看帮助
+# 查看帮助信息
 ./vps_setup.sh --help
+```
+
+## 使用说明
+
+### 使用前准备
+
+在正式执行安装前，请确认以下事项：
+
+- 服务器已安装受支持的 Linux 发行版
+- 你已拥有 root 权限，或能够通过 `sudo` 执行命令
+- 建议先备份当前系统配置，尤其是 SSH、防火墙和 DNS 相关设置
+- 如果部署环境为生产环境，建议先在测试环境中验证一次
+
+### 交互式安装
+
+在本地或远程服务器上执行以下命令，即可进入配置向导：
+
+```bash
+sudo ./vps_setup.sh
+```
+
+脚本将引导你完成主机名、用户、SSH、安全加固、Docker、备份和监控等配置。
+
+### 无人值守安装
+
+如果已经准备好配置，可以直接跳过交互步骤：
+
+```bash
+sudo ./vps_setup.sh -n
+```
+
+### 更新现有安装
+
+如需更新到最新版本，可以在安装目录中执行：
+
+```bash
+cd /opt/vps-init-setup
+git pull
+sudo ./vps_setup.sh -n
+```
+
+如果当前位于源码目录中，也可以直接执行：
+
+```bash
+git pull
+sudo ./vps_setup.sh -n
+```
+
+### 注意事项
+
+- 脚本会修改系统配置，包括 SSH、用户、DNS、防火墙和服务安装
+- 部分模块会安装较大的软件包，例如 Docker、Fail2ban 和 Netdata
+- 建议在执行前确认服务器资源充足，尤其是磁盘空间和网络状态
+- 如需先查看将要执行的内容，可使用 `-d` 预览模式：
+
+```bash
+sudo ./vps_setup.sh -n -d
 ```
 
 ## 设计原则
@@ -51,7 +133,7 @@ sudo ./vps_setup.sh --rollback
 ## 项目结构
 
 ```
-vps-auto-setup/
+vps-init-setup/
 ├── vps_setup.sh            # 入口：交互式向导 + CLI自动化
 ├── lib/
 │   ├── core.sh             # 核心库：系统检测、日志、状态追踪、审计、备份回滚
@@ -136,7 +218,7 @@ vps-auto-setup/
 
 ## 交互式可视化向导
 
-默认运行 `./vps_setup.sh` 会自动检测 `whiptail`（优先）或 `dialog`（备用），依次弹出可视化配置界面：
+默认运行 `./vps_setup.sh` 时，脚本会优先检测 `whiptail`，若不可用则回退到 `dialog`，并依次展示配置界面：
 
 ```
 ┌──────── 欢迎使用VPS一键装机 ────────┐
@@ -148,7 +230,7 @@ vps-auto-setup/
 └─────────────────────────────────────┘
 ```
 
-配置流程：
+配置流程包括：
 
 1. **系统设置** — 主机名、时区、语言环境、首选/备用 DNS
 2. **用户配置** — 用户名、SSH 公钥认证开关、密码策略
@@ -158,7 +240,7 @@ vps-auto-setup/
 6. **备份和监控** — 自动备份、Netdata/Node Exporter
 7. **系统清洗和优化** — 创建 Swap、卸载 Snap、清理缓存/日志/临时文件、禁用无用服务
 
-配置完成后自动保存至 `config/vps_config.conf`，后续非交互模式可直接复用。
+配置完成后，脚本会将结果保存到 `config/vps_config.conf`，后续可在非交互模式中直接复用。
 
 ### TUI 依赖安装
 
@@ -175,7 +257,7 @@ sudo dnf install -y newt
 sudo apk add newt
 ```
 
-未安装 TUI 工具时，脚本会自动降级为纯文本交互模式（read 回车确认）。
+若 TUI 工具未安装，脚本会自动降级为纯文本交互模式（通过 `read` 进行确认）。
 
 ## 配置体系
 
@@ -187,7 +269,7 @@ sudo apk add newt
 | 配置文件 | 中 | `config/vps_config.conf`（首次交互后自动持久化） |
 | 内置默认值 | 低 | `SSH_PORT=24822`、`LOCALE=zh_CN.UTF-8` |
 
-首次交互收集的配置自动持久化，后续 `./vps_setup.sh -n` 直接复用，无需重新回答。
+首次交互过程中收集到的配置会被持久化保存，后续执行 `./vps_setup.sh -n` 时可以直接复用，无需再次输入。
 
 ## 支持的系统
 
@@ -202,7 +284,7 @@ sudo apk add newt
 
 自动检测包管理器（apt/yum/dnf/apk）和 init 系统（systemd/SysVinit/OpenRC）。
 
-## 开发
+## 开发与贡献
 
 ### 语法检查
 
@@ -242,7 +324,7 @@ module_main() {
 2. 实现 `name_info()`、`name_prerequisites()`、`name_main()` 三个函数
 3. 在 `vps_setup.sh` 的 `MODULES` 数组中添加条目
 
-### 日志与审计
+### 相关文件说明
 
 - **运行日志**：`logs/vps_setup_YYYYMMDD_HHMMSS.log`
 - **审计日志**：`logs/audit_YYYYMMDD_HHMMSS.log`（记录所有写操作）
@@ -251,7 +333,7 @@ module_main() {
 
 ## 致谢
 
-本项目吸收了以下开源项目的实践精华：
+本项目参考了以下开源项目的实现思路：
 
 | 项目 | 吸收的长处 | 避免的短处 |
 |------|-----------|-----------|
