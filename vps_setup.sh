@@ -94,31 +94,39 @@ msg_box() {
 }
 
 # yesno_box "标题" "提示文案" [default_yn]
+# default: y/Y/1/true/yes = 默认是; n/N/0/false/no = 默认否
 yesno_box() {
     local title="$1"
     local prompt="${2:-$1}"
     local default="${3:-y}"
 
+    # 规范化默认值为 y/n 用于显示
+    local default_display
+    case "${default,,}" in
+        y|yes|1|t|true) default_display="y" ;;
+        *) default_display="n" ;;
+    esac
+
     if [ "$NON_INTERACTIVE" = true ]; then
         case "$default" in
-            [Yy1]|[Yy][eE][sS]) return 0 ;;
+            [Yy1]|[Yy][eE][sS]|[Tt][Rr][Uu][Ee]) return 0 ;;
             *) return 1 ;;
         esac
     else
         local answer
         local hint="[Y/n]"
-        [ "$default" = "n" ] && hint="[y/N]"
+        [ "$default_display" = "n" ] && hint="[y/N]"
         echo -e "${CYAN}--- ${title} ---${NC}"
         echo -e "  1) 是 (Yes)"
         echo -e "  2) 否 (No)"
         echo -e "  b) 返回上一步"
         while true; do
-            read -r -p "$prompt (选择 1/2 或 $hint, 默认: $default): " answer
+            read -r -p "$prompt (选择 1/2 或 $hint, 默认: $default_display): " answer
             if [ "$answer" = "b" ] || [ "$answer" = "back" ]; then
                 return 2
             fi
             if [ -z "$answer" ]; then
-                answer="$default"
+                answer="$default_display"
             fi
             case "$answer" in
                 1|[Yy]|[Yy][eE][sS]) return 0 ;;
@@ -471,21 +479,27 @@ configure_security() {
         case "$sub_step" in
             1)
                 res=0
-                yesno_box "Fail2ban 防爆破" "是否安装配置 Fail2ban 防暴力破解工具？" "${install_fail2ban:0:1}" || res=$?
+                local fb_default="y"
+                [ "$install_fail2ban" = "false" ] && fb_default="n"
+                yesno_box "Fail2ban 防爆破" "是否安装配置 Fail2ban 防暴力破解工具？" "$fb_default" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && install_fail2ban="true" || install_fail2ban="false"
                 sub_step=2
                 ;;
             2)
                 res=0
-                yesno_box "auditd 审计" "是否安装并启用 auditd 系统审计框架？" "${install_auditd:0:1}" || res=$?
+                local ad_default="n"
+                [ "$install_auditd" = "true" ] && ad_default="y"
+                yesno_box "auditd 审计" "是否安装并启用 auditd 系统审计框架？" "$ad_default" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 [ "$res" -eq 0 ] && install_auditd="true" || install_auditd="false"
                 sub_step=3
                 ;;
             3)
                 res=0
-                yesno_box "MAC 策略检查" "是否检查并配置 SELinux / AppArmor 安全策略？" "${enable_selinux_check:0:1}" || res=$?
+                local mac_default="y"
+                [ "$enable_selinux_check" = "false" ] && mac_default="n"
+                yesno_box "MAC 策略检查" "是否检查并配置 SELinux / AppArmor 安全策略？" "$mac_default" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=2; continue; }
                 [ "$res" -eq 0 ] && enable_selinux_check="true" || enable_selinux_check="false"
                 sub_step=4
@@ -514,14 +528,18 @@ configure_services() {
         case "$sub_step" in
             1)
                 res=0
-                yesno_box "Docker 引擎" "是否自动安装与配置 Docker 容器引擎？" "${install_docker:0:1}" || res=$?
+                local dk_default="y"
+                [ "$install_docker" = "false" ] && dk_default="n"
+                yesno_box "Docker 引擎" "是否自动安装与配置 Docker 容器引擎？" "$dk_default" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && install_docker="true" || install_docker="false"
                 sub_step=2
                 ;;
             2)
                 res=0
-                yesno_box "Node.js & npm" "是否安装 Node.js 与 npm 包管理器？" "${install_npm:0:1}" || res=$?
+                local npm_default="n"
+                [ "$install_npm" = "true" ] && npm_default="y"
+                yesno_box "Node.js & npm" "是否安装 Node.js 与 npm 包管理器？" "$npm_default" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 [ "$res" -eq 0 ] && install_npm="true" || install_npm="false"
                 sub_step=3
@@ -549,14 +567,18 @@ configure_backup_monitoring() {
         case "$sub_step" in
             1)
                 res=0
-                yesno_box "定时备份" "是否配置自动化备份任务？" "${enable_backup:0:1}" || res=$?
+                local bk_default="n"
+                [ "$enable_backup" = "true" ] && bk_default="y"
+                yesno_box "定时备份" "是否配置自动化备份任务？" "$bk_default" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && enable_backup="true" || enable_backup="false"
                 sub_step=2
                 ;;
             2)
                 res=0
-                yesno_box "监控组件" "是否部署 Prometheus Node Exporter 系统监控组件？" "${enable_monitoring:0:1}" || res=$?
+                local mon_default="n"
+                [ "$enable_monitoring" = "true" ] && mon_default="y"
+                yesno_box "监控组件" "是否部署 Prometheus Node Exporter 系统监控组件？" "$mon_default" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 if [ "$res" -eq 0 ]; then
                     enable_monitoring="true"
@@ -583,6 +605,10 @@ configure_cleanup() {
 
     local sub_step=1
     local enable_swap="${ENABLE_SWAP:-true}"
+    local swap_size="${SWAP_SIZE:-}"
+    local swap_file="${SWAP_FILE:-/swapfile}"
+    local swappiness="${SWAPPINESS:-10}"
+    local vfs_cache_pressure="${VFS_CACHE_PRESSURE:-50}"
     local remove_snap="${REMOVE_SNAP:-false}"
     local clean_pkg_cache="${CLEAN_PKG_CACHE:-true}"
     local clean_journal="${CLEAN_JOURNAL:-true}"
@@ -590,54 +616,126 @@ configure_cleanup() {
     local clean_temp="${CLEAN_TEMP:-true}"
     local res=0
 
-    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 6 ]; do
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 10 ]; do
         case "$sub_step" in
             1)
                 res=0
-                yesno_box "Swap 交换空间" "是否自动分配与配置 Swap 交换分区？(内存 ≤2G 推荐)" "${enable_swap:0:1}" || res=$?
+                local sw_default="y"
+                [ "$enable_swap" = "false" ] && sw_default="n"
+                yesno_box "Swap 交换空间" "是否自动分配与配置 Swap 交换分区？(内存 ≤2G 推荐)" "$sw_default" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && enable_swap="true" || enable_swap="false"
                 sub_step=2
                 ;;
             2)
-                res=0
-                yesno_box "Snap 卸载" "是否彻底卸载 Snap 软件包管理器？(仅 Ubuntu 有效)" "${remove_snap:0:1}" || res=$?
-                [ "$res" -eq 2 ] && { sub_step=1; continue; }
-                [ "$res" -eq 0 ] && remove_snap="true" || remove_snap="false"
-                sub_step=3
+                # 仅当启用 swap 时才询问大小/路径/参数
+                if [ "$enable_swap" = "true" ]; then
+                    res=0
+                    input_box swap_size "请输入 Swap 大小 (如 2G, 4G, 8G，留空自动按内存计算):" "$swap_size" || res=$?
+                    [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                    sub_step=3
+                else
+                    sub_step=6
+                fi
                 ;;
             3)
-                res=0
-                yesno_box "包缓存清理" "是否清理 APT/YUM 包管理器缓存并移除旧内核？" "${clean_pkg_cache:0:1}" || res=$?
-                [ "$res" -eq 2 ] && { sub_step=2; continue; }
-                [ "$res" -eq 0 ] && clean_pkg_cache="true" || clean_pkg_cache="false"
-                sub_step=4
+                if [ "$enable_swap" = "true" ]; then
+                    res=0
+                    input_box swap_file "请输入 Swap 文件路径:" "$swap_file" || res=$?
+                    [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                    sub_step=4
+                else
+                    sub_step=6
+                fi
                 ;;
             4)
-                res=0
-                yesno_box "systemd 日志限制" "是否清理旧日志并将日志上限限制为 200MB/7天？" "${clean_journal:0:1}" || res=$?
-                [ "$res" -eq 2 ] && { sub_step=3; continue; }
-                [ "$res" -eq 0 ] && clean_journal="true" || clean_journal="false"
-                sub_step=5
+                if [ "$enable_swap" = "true" ]; then
+                    res=0
+                    input_box swappiness "请输入 swappiness 值 (0-100，越小越少用 swap，推荐 10):" "$swappiness" || res=$?
+                    [ "$res" -eq 2 ] && { sub_step=3; continue; }
+                    if ! validate_number "$swappiness" 2>/dev/null || [ "$swappiness" -lt 0 ] || [ "$swappiness" -gt 100 ]; then
+                        echo -e "${RED}swappiness 必须为 0-100 之间的数字${NC}"
+                        continue
+                    fi
+                    sub_step=5
+                else
+                    sub_step=6
+                fi
                 ;;
             5)
-                res=0
-                yesno_box "无用服务禁用" "是否自动停用与禁用不必要的后台服务？" "${disable_services:0:1}" || res=$?
-                [ "$res" -eq 2 ] && { sub_step=4; continue; }
-                [ "$res" -eq 0 ] && disable_services="true" || disable_services="false"
-                sub_step=6
+                if [ "$enable_swap" = "true" ]; then
+                    res=0
+                    input_box vfs_cache_pressure "请输入 vfs_cache_pressure 值 (0-1000，推荐 50):" "$vfs_cache_pressure" || res=$?
+                    [ "$res" -eq 2 ] && { sub_step=4; continue; }
+                    if ! validate_number "$vfs_cache_pressure" 2>/dev/null || [ "$vfs_cache_pressure" -lt 0 ] || [ "$vfs_cache_pressure" -gt 1000 ]; then
+                        echo -e "${RED}vfs_cache_pressure 必须为 0-1000 之间的数字${NC}"
+                        continue
+                    fi
+                    sub_step=6
+                else
+                    sub_step=6
+                fi
                 ;;
             6)
                 res=0
-                yesno_box "临时文件清理" "是否清理 /tmp 临时文件及系统临时日志？" "${clean_temp:0:1}" || res=$?
-                [ "$res" -eq 2 ] && { sub_step=5; continue; }
-                [ "$res" -eq 0 ] && clean_temp="true" || clean_temp="false"
+                local snap_default="n"
+                [ "$remove_snap" = "true" ] && snap_default="y"
+                yesno_box "Snap 卸载" "是否彻底卸载 Snap 软件包管理器？(仅 Ubuntu 有效)" "$snap_default" || res=$?
+                if [ "$res" -eq 2 ]; then
+                    if [ "$enable_swap" = "true" ]; then
+                        sub_step=5
+                    else
+                        sub_step=1
+                    fi
+                    continue
+                fi
+                [ "$res" -eq 0 ] && remove_snap="true" || remove_snap="false"
                 sub_step=7
+                ;;
+            7)
+                res=0
+                local pkg_default="y"
+                [ "$clean_pkg_cache" = "false" ] && pkg_default="n"
+                yesno_box "包缓存清理" "是否清理 APT/YUM 包管理器缓存并移除旧内核？" "$pkg_default" || res=$?
+                [ "$res" -eq 2 ] && { sub_step=6; continue; }
+                [ "$res" -eq 0 ] && clean_pkg_cache="true" || clean_pkg_cache="false"
+                sub_step=8
+                ;;
+            8)
+                res=0
+                local jrn_default="y"
+                [ "$clean_journal" = "false" ] && jrn_default="n"
+                yesno_box "systemd 日志限制" "是否清理旧日志并将日志上限限制为 200MB/7天？" "$jrn_default" || res=$?
+                [ "$res" -eq 2 ] && { sub_step=7; continue; }
+                [ "$res" -eq 0 ] && clean_journal="true" || clean_journal="false"
+                sub_step=9
+                ;;
+            9)
+                res=0
+                local ds_default="n"
+                [ "$disable_services" = "true" ] && ds_default="y"
+                yesno_box "无用服务禁用" "是否自动停用与禁用不必要的后台服务？" "$ds_default" || res=$?
+                [ "$res" -eq 2 ] && { sub_step=8; continue; }
+                [ "$res" -eq 0 ] && disable_services="true" || disable_services="false"
+                sub_step=10
+                ;;
+            10)
+                res=0
+                local tmp_default="y"
+                [ "$clean_temp" = "false" ] && tmp_default="n"
+                yesno_box "临时文件清理" "是否清理 /tmp 临时文件及系统临时日志？" "$tmp_default" || res=$?
+                [ "$res" -eq 2 ] && { sub_step=9; continue; }
+                [ "$res" -eq 0 ] && clean_temp="true" || clean_temp="false"
+                sub_step=11
                 ;;
         esac
     done
 
     export ENABLE_SWAP="$enable_swap"
+    export SWAP_SIZE="$swap_size"
+    export SWAP_FILE="$swap_file"
+    export SWAPPINESS="$swappiness"
+    export VFS_CACHE_PRESSURE="$vfs_cache_pressure"
     export REMOVE_SNAP="$remove_snap"
     export CLEAN_PKG_CACHE="$clean_pkg_cache"
     export CLEAN_JOURNAL="$clean_journal"

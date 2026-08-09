@@ -32,6 +32,10 @@ ENABLE_BACKUP 'Whether to enable backup system (true/false)'
 ENABLE_MONITORING 'Whether to enable monitoring tools (true/false)'
 BACKEND_STORAGE 'Backup backend storage (e.g., rclone://remote/backup)'
 ENABLE_SWAP 'Whether to create swap (true/false)'
+SWAP_SIZE 'Swap size (e.g., 2G, 4G, 8G)'
+SWAP_FILE 'Swap file path (e.g., /swapfile)'
+SWAPPINESS 'VM swappiness value (0-100)'
+VFS_CACHE_PRESSURE 'VM vfs_cache_pressure value (0-1000)'
 REMOVE_SNAP 'Whether to remove snap (true/false)'
 CLEAN_PKG_CACHE 'Whether to clean package cache (true/false)'
 CLEAN_JOURNAL 'Whether to clean journal logs (true/false)'
@@ -235,6 +239,10 @@ apply_config_defaults() {
     : "${SSH_PUBKEY_AUTH:=yes}"
     : "${SSH_PUBKEY:=}"
     : "${ENABLE_SWAP:=true}"
+    : "${SWAP_SIZE:=}"
+    : "${SWAP_FILE:=/swapfile}"
+    : "${SWAPPINESS:=10}"
+    : "${VFS_CACHE_PRESSURE:=50}"
     : "${REMOVE_SNAP:=false}"
     : "${CLEAN_PKG_CACHE:=true}"
     : "${CLEAN_JOURNAL:=true}"
