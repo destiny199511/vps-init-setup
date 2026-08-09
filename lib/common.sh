@@ -12,6 +12,8 @@ SSH_PORT 'SSH port number'
 PERMIT_ROOT_LOGIN 'Allow root login via SSH (yes/no)'
 PASSWORD_AUTH 'Allow password authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTHENTICATION 'Allow public key authentication via SSH (yes/no)'
+SSH_PUBKEY_AUTH 'Whether SSH public key auth was chosen in wizard (yes/no)'
+SSH_PUBKEY 'Optional SSH public key content'
 SSH_PERMIT_EMPTY_PASSWORDS 'Allow empty passwords via SSH (yes/no)'
 SSH_MAX_AUTH_TRIES 'Maximum authentication attempts'
 SSH_MAX_SESSIONS 'Maximum multiplexed sessions'
@@ -23,8 +25,18 @@ INSTALL_DOCKER 'Whether to install Docker (true/false)'
 INSTALL_NPM 'Whether to install NPM (Node Package Manager) (true/false)'
 DOMAIN 'Domain name for reverse proxy'
 INSTALL_NODE_EXPORTER 'Whether to install node exporter (true/false)'
+INSTALL_FAIL2BAN 'Whether to install Fail2ban (true/false)'
+INSTALL_AUDITD 'Whether to install auditd (true/false)'
+ENABLE_SELINUX_CHECK 'Whether to check SELinux/AppArmor (true/false)'
 ENABLE_BACKUP 'Whether to enable backup system (true/false)'
+ENABLE_MONITORING 'Whether to enable monitoring tools (true/false)'
 BACKEND_STORAGE 'Backup backend storage (e.g., rclone://remote/backup)'
+ENABLE_SWAP 'Whether to create swap (true/false)'
+REMOVE_SNAP 'Whether to remove snap (true/false)'
+CLEAN_PKG_CACHE 'Whether to clean package cache (true/false)'
+CLEAN_JOURNAL 'Whether to clean journal logs (true/false)'
+DISABLE_SERVICES 'Whether to disable unused services (true/false)'
+CLEAN_TEMP 'Whether to clean temporary files (true/false)'
 "
 
 # Get list of configuration variable names
@@ -35,22 +47,30 @@ get_config_var_names() {
 # Load configuration from file and environment variables
 load_config() {
     local config_file="$1"
-    
+    HOSTNAME_FROM_CONFIG="${HOSTNAME_FROM_CONFIG:-false}"
+
     # Load from file if it exists
     if [ -f "$config_file" ]; then
+        if grep -qE '^[[:space:]]*HOSTNAME=' "$config_file" 2>/dev/null; then
+            HOSTNAME_FROM_CONFIG=true
+        fi
         # shellcheck disable=SC1090
         . "$config_file"
         log_info "Loaded configuration from $config_file"
     fi
-    
+
     # Override with environment variables (VPS_SETUP_ prefix)
     for var in $(get_config_var_names); do
         env_var="VPS_SETUP_$var"
         if [ -n "${!env_var:-}" ]; then
             export "$var"="${!env_var}"
+            if [ "$var" = "HOSTNAME" ]; then
+                HOSTNAME_FROM_CONFIG=true
+            fi
             log_debug "Overrode $var with environment variable $env_var"
         fi
     done
+    export HOSTNAME_FROM_CONFIG
 }
 
 # Save current configuration to file
@@ -181,7 +201,12 @@ validate_hostname() {
 apply_config_defaults() {
     # Set defaults for variables that don't have values yet
     : "${USERNAME:=appadmin}"
-    : "${HOSTNAME:=my-vps-server}"
+    # bash/环境会预置 HOSTNAME；仅在配置文件或 VPS_SETUP_HOSTNAME 未指定时使用产品默认值
+    if [[ "${HOSTNAME_FROM_CONFIG:-false}" != "true" && -z "${VPS_SETUP_HOSTNAME:-}" ]]; then
+        HOSTNAME="my-vps-server"
+    else
+        : "${HOSTNAME:=my-vps-server}"
+    fi
     : "${TIMEZONE:=Asia/Shanghai}"
     : "${LOCALE:=zh_CN.UTF-8}"
     : "${PRIMARY_DNS:=1.1.1.1}"
@@ -198,9 +223,21 @@ apply_config_defaults() {
     : "${SSH_LOGIN_GRACE_TIME:=60}"
     : "${ALLOWED_PORTS:=}"
     : "${INSTALL_DOCKER:=true}"
-    : "${INSTALL_NPM:=true}"
+    : "${INSTALL_NPM:=false}"
     : "${DOMAIN:=example.com}"
     : "${INSTALL_NODE_EXPORTER:=true}"
-    : "${ENABLE_BACKUP:=true}"
+    : "${INSTALL_FAIL2BAN:=true}"
+    : "${INSTALL_AUDITD:=false}"
+    : "${ENABLE_SELINUX_CHECK:=true}"
+    : "${ENABLE_BACKUP:=false}"
+    : "${ENABLE_MONITORING:=false}"
     : "${BACKEND_STORAGE:=rclone://remote/backup}"
+    : "${SSH_PUBKEY_AUTH:=yes}"
+    : "${SSH_PUBKEY:=}"
+    : "${ENABLE_SWAP:=true}"
+    : "${REMOVE_SNAP:=false}"
+    : "${CLEAN_PKG_CACHE:=true}"
+    : "${CLEAN_JOURNAL:=true}"
+    : "${DISABLE_SERVICES:=false}"
+    : "${CLEAN_TEMP:=true}"
 }

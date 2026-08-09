@@ -23,9 +23,11 @@ INTERACTIVE_MODE=true
 NON_INTERACTIVE=false
 DRY_RUN=false
 FORCE_MODE=false
+AUTO_YES="${AUTO_YES:-false}"
 ACTION="install" # install, rollback, status
 SELECTED_MODULES=() # 如果为空则表示所有模块
 CONFIG_FILE="${CONFIG_DIR}/vps_config.conf"
+WIZARD_TOTAL_STEPS=7
 
 # 模块定义 (顺序重要)
 MODULES=(
@@ -77,9 +79,10 @@ prompt_or_default() {
 msg_box() {
     local title="$1"
     local text="$2"
-    echo
-    echo "=== $title ==="
-    echo "$text"
+    print_section "${title}"
+    # 支持字面量 \n 与真实换行
+    printf '%b\n' "${text}"
+    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
     echo
 }
 
@@ -180,65 +183,61 @@ menu_select() {
 # 配置系统设置
 configure_system() {
     local hostname timezone locale primary_dns secondary_dns
-    
+
+    print_step "1/${WIZARD_TOTAL_STEPS}" "系统基础配置"
+    echo -e "${DIM}设置主机名、时区、语言环境与 DNS${NC}"
+
     hostname=$(input_box "系统主机名" "请输入主机名:" "${HOSTNAME:-my-vps-server}")
-    [ $? -ne 0 ] && return 1
-    
+    while ! validate_hostname "$hostname" 2>/dev/null; do
+        echo -e "${RED}主机名格式无效，请重试。${NC}"
+        hostname=$(input_box "系统主机名" "请输入主机名:" "${HOSTNAME:-my-vps-server}")
+    done
+
     timezone=$(input_box "时区" "请输入时区 (例如: Asia/Shanghai):" "${TIMEZONE:-Asia/Shanghai}")
-    [ $? -ne 0 ] && return 1
-    
     locale=$(input_box "语言环境" "请输入语言环境 (例如: zh_CN.UTF-8):" "${LOCALE:-zh_CN.UTF-8}")
-    [ $? -ne 0 ] && return 1
-    
     primary_dns=$(input_box "首选DNS" "请输入首选DNS服务器:" "${PRIMARY_DNS:-1.1.1.1}")
-    [ $? -ne 0 ] && return 1
-    
     secondary_dns=$(input_box "备用DNS" "请输入备用DNS服务器:" "${SECONDARY_DNS:-8.8.8.8}")
-    [ $? -ne 0 ] && return 1
-    
-    # 导出变量供模块使用
+
     export HOSTNAME="$hostname"
     export TIMEZONE="$timezone"
     export LOCALE="$locale"
     export PRIMARY_DNS="$primary_dns"
     export SECONDARY_DNS="$secondary_dns"
-    
+
     return 0
 }
 
 # 配置用户设置
 configure_user() {
-    local username ssh_pubkey_password_auth ssh_pubkey
-    
+    local username ssh_pubkey_auth ssh_pubkey password_auth
+
+    print_step "2/${WIZARD_TOTAL_STEPS}" "用户账户配置"
+    echo -e "${DIM}创建非 root 管理用户，并配置登录方式${NC}"
+
     username=$(input_box "普通用户名" "请输入普通用户名:" "${USERNAME:-appadmin}")
-    [ $? -ne 0 ] && return 1
-    
-    # SSH 公钥选项
-    if yesno_box "SSH公钥认证" "是否使用SSH公钥认证？(如果选择否，将使用密码认证)" ; then
+
+    if yesno_box "SSH公钥认证" "是否使用SSH公钥认证？(如果选择否，将使用密码认证)"; then
         ssh_pubkey_auth="yes"
-        # 让用户输入或粘贴公钥
-        ssh_pubkey=$(input_box "SSH公钥" "请输入SSH公钥（可以为空，则自动生成密钥对）:" "")
-        [ $? -ne 0 ] && return 1
+        ssh_pubkey=$(input_box "SSH公钥" "请输入SSH公钥（可以为空，则自动生成密钥对）:" "${SSH_PUBKEY:-}")
     else
         ssh_pubkey_auth="no"
         ssh_pubkey=""
     fi
-    
-    # 密码认证
+
     if [ "$ssh_pubkey_auth" = "no" ]; then
         password_auth="yes"
     else
-        if yesno_box "密码认证" "是否允许密码认证？（不推荐，但有时必要）" ; then
+        if yesno_box "密码认证" "是否允许密码认证？（不推荐，但有时必要）"; then
             password_auth="yes"
         else
             password_auth="no"
         fi
     fi
-    
+
     export USERNAME="$username"
-    export SSH_PUBKEY_AUTHENTICATION="yes"
+    export SSH_PUBKEY_AUTHENTICATION="$ssh_pubkey_auth"
     export SSH_PUBKEY="$ssh_pubkey"
-    export PASSWORD_AUTH="yes"
+    export PASSWORD_AUTH="$password_auth"
     export SSH_PUBKEY_AUTH="$ssh_pubkey_auth"
 
     return 0
@@ -248,28 +247,44 @@ configure_user() {
 configure_ssh() {
     local ssh_port permit_root_login max_auth_tries client_alive_interval client_alive_count_max login_grace_time
 
-    ssh_port=$(input_box "SSH端口" "请输入SSH端口号 (默认: 24822):" "${SSH_PORT:-24822}")
-    if ! validate_port "$ssh_port" 2>/dev/null; then
-        msg_box "错误" "端口号无效"
-        return 1
-    fi
-    
-    if yesno_box "是否允许root通过SSH登录?"; then
+    print_step "3/${WIZARD_TOTAL_STEPS}" "SSH 加固配置"
+    echo -e "${DIM}建议使用非 22 端口，并限制 root 密码登录${NC}"
+
+    ssh_port=$(input_box "SSH端口" "请输入SSH端口号:" "${SSH_PORT:-24822}")
+    while ! validate_port "$ssh_port" 2>/dev/null; do
+        echo -e "${RED}端口号无效（1-65535），请重试。${NC}"
+        ssh_port=$(input_box "SSH端口" "请输入SSH端口号:" "${SSH_PORT:-24822}")
+    done
+
+    if yesno_box "Root 登录" "是否允许 root 通过 SSH 登录？（生产环境建议 no）"; then
         permit_root_login="yes"
     else
         permit_root_login="no"
     fi
-    
-    max_auth_tries=$(input_box "最大认证尝试次数" "请输入最大认证尝试次数 (默认: 3):" "${SSH_MAX_AUTH_TRIES:-3}")
-    [ $? -ne 0 ] && ! validate_number "$max_auth_tries" && { msg_box "错误" "请输入有效数字"; return 1; }
-    
-    client_alive_interval=$(input_box "客户端保活间隔" "请输入客户端保活间隔(秒) (默认: 300):" "${SSH_CLIENT_ALIVE_INTERVAL:-300}")
-    [ $? -ne 0 ] && ! validate_number "$client_alive_interval" && { msg_box "错误" "请输入有效数字"; return 1; }
-    
-    client_alive_count_max=$(input_box "客户端保活计数最大值" "请输入客户端保活计数最大值 (默认: 2):" "${SSH_CLIENT_ALIVE_COUNT_MAX:-2}")
-    [ $? -ne 0 ] && ! validate_number "$client_alive_count_max" && { msg_box "错误" "请输入有效数字"; return 1; }
-    
-    login_grace_time=$(input_box "登录宽限时间" "请输入登录宽限时间(秒) (默认: 60):" "${SSH_LOGIN_GRACE_TIME:-60}")
+
+    max_auth_tries=$(input_box "最大认证尝试次数" "请输入最大认证尝试次数:" "${SSH_MAX_AUTH_TRIES:-3}")
+    while ! validate_number "$max_auth_tries" 2>/dev/null; do
+        echo -e "${RED}请输入有效数字。${NC}"
+        max_auth_tries=$(input_box "最大认证尝试次数" "请输入最大认证尝试次数:" "${SSH_MAX_AUTH_TRIES:-3}")
+    done
+
+    client_alive_interval=$(input_box "客户端保活间隔" "请输入客户端保活间隔(秒):" "${SSH_CLIENT_ALIVE_INTERVAL:-300}")
+    while ! validate_number "$client_alive_interval" 2>/dev/null; do
+        echo -e "${RED}请输入有效数字。${NC}"
+        client_alive_interval=$(input_box "客户端保活间隔" "请输入客户端保活间隔(秒):" "${SSH_CLIENT_ALIVE_INTERVAL:-300}")
+    done
+
+    client_alive_count_max=$(input_box "客户端保活计数最大值" "请输入客户端保活计数最大值:" "${SSH_CLIENT_ALIVE_COUNT_MAX:-2}")
+    while ! validate_number "$client_alive_count_max" 2>/dev/null; do
+        echo -e "${RED}请输入有效数字。${NC}"
+        client_alive_count_max=$(input_box "客户端保活计数最大值" "请输入客户端保活计数最大值:" "${SSH_CLIENT_ALIVE_COUNT_MAX:-2}")
+    done
+
+    login_grace_time=$(input_box "登录宽限时间" "请输入登录宽限时间(秒):" "${SSH_LOGIN_GRACE_TIME:-60}")
+    while ! validate_number "$login_grace_time" 2>/dev/null; do
+        echo -e "${RED}请输入有效数字。${NC}"
+        login_grace_time=$(input_box "登录宽限时间" "请输入登录宽限时间(秒):" "${SSH_LOGIN_GRACE_TIME:-60}")
+    done
 
     export SSH_PORT="$ssh_port"
     export PERMIT_ROOT_LOGIN="$permit_root_login"
@@ -277,77 +292,88 @@ configure_ssh() {
     export SSH_CLIENT_ALIVE_INTERVAL="$client_alive_interval"
     export SSH_CLIENT_ALIVE_COUNT_MAX="$client_alive_count_max"
     export SSH_LOGIN_GRACE_TIME="$login_grace_time"
-    
+
     return 0
 }
 
 # 配置安全设置
 configure_security() {
     local install_fail2ban install_auditd enable_selinux_check
-    
-    if yesno_box "安装Fail2Ban" "是否安装并配置Fail2Ban来防暴力破解？" ; then
+
+    print_step "4/${WIZARD_TOTAL_STEPS}" "安全组件配置"
+    echo -e "${DIM}Fail2ban / 审计 / MAC 策略检查${NC}"
+
+    if yesno_box "安装Fail2Ban" "是否安装并配置 Fail2Ban 防暴力破解？（推荐）"; then
         install_fail2ban="true"
     else
         install_fail2ban="false"
     fi
-    
-    if yesno_box "启用审计日志" "是否启用auditd来记录系统调用和用户行为？" ; then
+
+    if yesno_box "启用审计日志" "是否启用 auditd 记录系统调用和用户行为？"; then
         install_auditd="true"
     else
         install_auditd="false"
     fi
-    
-    if yesno_box "检查SELinux/AppArmor" "是否检查并配置MAC策略（SELinux/AppArmor）？" ; then
+
+    if yesno_box "检查SELinux/AppArmor" "是否检查并配置 MAC 策略（SELinux/AppArmor）？"; then
         enable_selinux_check="true"
     else
         enable_selinux_check="false"
     fi
-    
+
     export INSTALL_FAIL2BAN="$install_fail2ban"
     export INSTALL_AUDITD="$install_auditd"
     export ENABLE_SELINUX_CHECK="$enable_selinux_check"
-    
+
     return 0
 }
 
 # 配置服务设置
 configure_services() {
     local install_docker install_npm
-    
-    if yesno_box "安装Docker" "是否安装Docker引擎？" ; then
+
+    print_step "5/${WIZARD_TOTAL_STEPS}" "可选服务安装"
+    echo -e "${DIM}Docker / Node.js(npm) 等运行时${NC}"
+
+    if yesno_box "安装Docker" "是否安装 Docker 引擎？"; then
         install_docker="true"
     else
         install_docker="false"
     fi
-    
-    if yesno_box "安装NPM" "是否安装Node.js包管理器（Node.js和npm）？" ; then
+
+    if yesno_box "安装NPM" "是否安装 Node.js 与 npm？"; then
         install_npm="true"
     else
         install_npm="false"
     fi
-    
+
     export INSTALL_DOCKER="$install_docker"
     export INSTALL_NPM="$install_npm"
-    
+
     return 0
 }
 
 # 配置备份和监控
 configure_backup_monitoring() {
     local enable_backup enable_monitoring
-    
-    if yesno_box "启用备份" "是否启用自动备份系统？" ; then
+
+    print_step "6/${WIZARD_TOTAL_STEPS}" "备份与监控"
+    echo -e "${DIM}可选：自动备份、Netdata/Node Exporter${NC}"
+
+    if yesno_box "启用备份" "是否启用自动备份系统？"; then
         enable_backup="true"
     else
         enable_backup="false"
     fi
-    
-    if yesno_box "启用监控" "是否安装系统监控工具（如Netdata或Node Exporter）？" ; then
+
+    if yesno_box "启用监控" "是否安装系统监控工具（如 Netdata 或 Node Exporter）？"; then
         enable_monitoring="true"
+        export INSTALL_NODE_EXPORTER="true"
     else
         enable_monitoring="false"
+        export INSTALL_NODE_EXPORTER="false"
     fi
-    
+
     export ENABLE_BACKUP="$enable_backup"
     export ENABLE_MONITORING="$enable_monitoring"
 
@@ -358,37 +384,40 @@ configure_backup_monitoring() {
 configure_cleanup() {
     local enable_swap remove_snap clean_pkg_cache clean_journal disable_services clean_temp
 
-    if yesno_box "创建Swap" "是否自动创建Swap交换分区？（内存≤2G推荐创建）" ; then
+    print_step "7/${WIZARD_TOTAL_STEPS}" "系统清理与优化"
+    echo -e "${DIM}Swap / Snap / 缓存 / 日志 / 无用服务${NC}"
+
+    if yesno_box "创建Swap" "是否自动创建 Swap？（内存 ≤2G 推荐）"; then
         enable_swap="true"
     else
         enable_swap="false"
     fi
 
-    if yesno_box "卸载Snap" "是否卸载snap并阻止其重新安装？（仅Ubuntu）" ; then
+    if yesno_box "卸载Snap" "是否卸载 snap 并阻止其重新安装？（仅 Ubuntu）"; then
         remove_snap="true"
     else
         remove_snap="false"
     fi
 
-    if yesno_box "清理包缓存" "是否清理包管理器缓存并移除旧内核？" ; then
+    if yesno_box "清理包缓存" "是否清理包管理器缓存并移除旧内核？"; then
         clean_pkg_cache="true"
     else
         clean_pkg_cache="false"
     fi
 
-    if yesno_box "清理日志" "是否清理systemd日志并限制其最大容量（200MB/7天）？" ; then
+    if yesno_box "清理日志" "是否清理 systemd 日志并限制容量（200MB/7天）？"; then
         clean_journal="true"
     else
         clean_journal="false"
     fi
 
-    if yesno_box "禁用无用服务" "是否禁用不必要的服务以节省资源？" ; then
+    if yesno_box "禁用无用服务" "是否禁用不必要的服务以节省资源？"; then
         disable_services="true"
     else
         disable_services="false"
     fi
 
-    if yesno_box "清理临时文件" "是否清理/tmp和旧日志文件？" ; then
+    if yesno_box "清理临时文件" "是否清理 /tmp 和旧日志文件？"; then
         clean_temp="true"
     else
         clean_temp="false"
@@ -406,55 +435,73 @@ configure_cleanup() {
 
 # 主配置向导
 run_configuration_wizard() {
-    local ret=0
-    
-    msg_box "欢迎使用VPS一键装机" "欢迎使用VPS一键装机向导\n\n本向导将帮助您配置系统的各项参数。\n请按提示输入，回车以接受默认值。"
-    
-    # 系统设置
+    print_section "欢迎使用 VPS 一键装机"
+    echo -e "本向导将分 ${WIZARD_TOTAL_STEPS} 步收集配置。"
+    echo -e "直接回车 = 接受默认值；也可稍后在 Review 中确认。"
+    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+
     if ! configure_system; then
         msg_box "错误" "系统配置过程中发生错误。"
         return 1
     fi
-    
-    # 用户设置
+
     if ! configure_user; then
         msg_box "错误" "用户配置过程中发生错误。"
         return 1
     fi
-    
-    # SSH设置
+
     if ! configure_ssh; then
         msg_box "错误" "SSH配置过程中发生错误。"
         return 1
     fi
-    
-    # 安全设置
+
     if ! configure_security; then
         msg_box "错误" "安全配置过程中发生错误。"
         return 1
     fi
-    
-    # 服务设置
+
     if ! configure_services; then
         msg_box "错误" "服务配置过程中发生错误。"
         return 1
     fi
-    
-    # 备份和监控设置
+
     if ! configure_backup_monitoring; then
         msg_box "错误" "备份和监控配置过程中发生错误。"
         return 1
     fi
 
-    # 系统清洗和优化设置
     if ! configure_cleanup; then
         msg_box "错误" "清洗优化配置过程中发生错误。"
         return 1
     fi
 
-    msg_box "配置完成" "所有配置已完成！\\n系统将保存配置并开始安装过程。"
-    
+    print_section "配置采集完成"
+    echo -e "即将保存配置并进入安装前确认。"
+    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+
     return 0
+}
+
+# 安装前 Review；返回 0 表示继续，1 表示取消
+confirm_configuration_review() {
+    local modules_count="$1"
+    print_review_card "${modules_count}"
+
+    if [ "$NON_INTERACTIVE" = true ] || [ "$AUTO_YES" = true ]; then
+        log_info "非交互/自动模式：跳过 Review 确认，继续安装。"
+        return 0
+    fi
+
+    local answer
+    while true; do
+        read -rp "确认开始安装？[Y=开始 / n=取消]: " answer
+        answer="${answer:-Y}"
+        case "$answer" in
+            [Yy]|[Yy][eE][sS]) return 0 ;;
+            [Nn]|[Nn][oO]) return 1 ;;
+            *) echo "请输入 Y 或 n" ;;
+        esac
+    done
 }
 
 # ===== 主程序 =====
@@ -463,16 +510,26 @@ run_configuration_wizard() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
-            echo "用法: $0 [选项]"
-            echo "选项:"
-            echo "  -h, --help              显示此帮助信息"
-            echo "  -n, --non-interactive   非交互模式（使用现有配置或默认值）"
-            echo "  -a, --auto              自动模式（非交互+使用默认值跳过所有提示）"
-            echo "  -d, --dry-run           试运行（仅显示将要执行的操作，不实际执行）"
-            echo "  -f, --force             强制重新执行已完成的模块"
-            echo "  --modules <list>        仅执行指定的模块，用逗号分隔 (例如: 01_hostname,05_ssh)"
-            echo "  --rollback              回滚已完成的更改（恢复备份的配置文件）"
-            echo "  --status                显示各模块的执行状态"
+            print_header "VPS 一键装机 v${VPS_TOOL_VERSION}"
+            cat <<EOF
+用法: $0 [选项]
+
+选项:
+  -h, --help              显示此帮助信息
+  -n, --non-interactive   非交互模式（使用现有配置或默认值）
+  -a, --auto              自动模式（非交互 + 跳过确认提示）
+  -d, --dry-run           试运行（仅显示将要执行的操作，不实际执行）
+  -f, --force             强制重新执行已完成的模块
+  --modules <list>        仅执行指定模块，逗号分隔 (例如: 01_hostname,05_ssh)
+  --rollback              回滚已完成的更改（恢复备份的配置文件）
+  --status                显示各模块的执行状态
+
+示例:
+  sudo $0                 # 交互式向导
+  sudo $0 -n -d           # 非交互试运行
+  sudo $0 -a              # 全自动默认配置安装
+  sudo $0 --status        # 查看模块状态
+EOF
             exit 0
             ;;
         -n|--non-interactive)
@@ -483,6 +540,7 @@ while [[ $# -gt 0 ]]; do
         -a|--auto)
             INTERACTIVE_MODE=false
             NON_INTERACTIVE=true
+            AUTO_YES=true
             shift
             ;;
         -d|--dry-run)
@@ -497,7 +555,6 @@ while [[ $# -gt 0 ]]; do
             IFS=',' read -ra MODS <<< "$2"
             SELECTED_MODULES=()
             for mod in "${MODS[@]}"; do
-                # 去除空格
                 mod=$(echo "$mod" | xargs)
                 SELECTED_MODULES+=("$mod")
             done
@@ -519,6 +576,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# 初始化系统探测与启动横幅
+MODE_LABEL="交互式配置向导"
+if [ "$ACTION" = "status" ]; then
+    MODE_LABEL="状态查询"
+elif [ "$ACTION" = "rollback" ]; then
+    MODE_LABEL="回滚"
+elif [ "$DRY_RUN" = true ] && [ "$NON_INTERACTIVE" = true ]; then
+    MODE_LABEL="非交互试运行"
+elif [ "$DRY_RUN" = true ]; then
+    MODE_LABEL="试运行"
+elif [ "$AUTO_YES" = true ]; then
+    MODE_LABEL="自动安装"
+elif [ "$NON_INTERACTIVE" = true ]; then
+    MODE_LABEL="非交互安装"
+fi
+
+init_system
+print_startup_banner "$MODE_LABEL"
+
 # 如果是非交互模式，尝试加载配置
 if [ "$NON_INTERACTIVE" = true ]; then
     if [ -f "$CONFIG_FILE" ]; then
@@ -537,7 +613,8 @@ if [ "$ACTION" = "install" ] && [ "$INTERACTIVE_MODE" = true ]; then
         log_error "配置向导失败，退出。"
         exit 1
     fi
-    # 保存配置
+    # 保存全部已知配置键
+    # shellcheck disable=SC2046
     save_config "$CONFIG_FILE" $(get_config_var_names)
     log_info "配置已保存到 $CONFIG_FILE"
 fi
@@ -548,34 +625,22 @@ apply_config_defaults
 # 打印配置摘要（调试用）
 log_debug "=== 配置摘要 ==="
 for var in $(get_config_var_names); do
-    log_debug "$var=${!var}"
+    log_debug "$var=${!var:-}"
 done
 log_debug "=================="
 
 # 根据操作执行相应任务
 case "$ACTION" in
     status)
-        echo "=== 模块状态 ==="
-        for module in "${MODULES[@]}"; do
-            name="${module%%:*}"
-            desc="${module#*:}"
-            status=$(state_get "$name")
-            if [ -z "$status" ]; then
-                status="未运行"
-            fi
-            printf "%-25s %-40s [%s]\n" "$name" "$desc" "$status"
-        done
+        print_status_table MODULES
         exit 0
         ;;
     rollback)
         log_info "开始回滚操作..."
-        # TODO: 实现回滚逻辑（恢复备份的文件，重置状态等）
-        # 为了简单，这里只提示
-        msg_box "回滚" "回滚功能尚未完全实现。\\n请手动从备份目录恢复文件。"
+        msg_box "回滚" "回滚功能尚未完全实现。\n请手动从备份目录恢复文件:\n${BACKUPS_DIR}"
         exit 0
         ;;
     install)
-        # 正常安装流程
         :
         ;;
     *)
@@ -586,10 +651,8 @@ esac
 
 # 确定要运行的模块列表
 if [ ${#SELECTED_MODULES[@]} -eq 0 ]; then
-    # 如果未指定具体模块，则使用所有模块
     MODULES_TO_RUN=("${MODULES[@]}")
 else
-    # 过滤出用户指定的模块
     MODULES_TO_RUN=()
     for module in "${MODULES[@]}"; do
         name="${module%%:*}"
@@ -602,90 +665,125 @@ else
     done
 fi
 
-# 如果没有模块要运行，退出
 if [ ${#MODULES_TO_RUN[@]} -eq 0 ]; then
     log_error "没有指定要运行的模块。"
     exit 1
 fi
 
-# 记录开始时间
+# 安装前 Review
+if ! confirm_configuration_review "${#MODULES_TO_RUN[@]}"; then
+    log_warn "用户取消安装。"
+    exit 1
+fi
+
+# 记录开始时间与结果计数
 START_TIME=$(date +%s)
+MODULE_TOTAL=${#MODULES_TO_RUN[@]}
+MODULE_INDEX=0
+DONE_COUNT=0
+FAILED_COUNT=0
+SKIPPED_COUNT=0
+MODULE_SUMMARY_LINES=""
+
+print_section "开始执行模块"
+echo -e "共 ${MODULE_TOTAL} 个模块；失败将标记后继续。"
+echo -e "${GREEN}═══════════════════════════════════════════${NC}"
 
 # 按顺序执行每个模块
 for module in "${MODULES_TO_RUN[@]}"; do
     name="${module%%:*}"
     desc="${module#*:}"
-    
+    MODULE_INDEX=$((MODULE_INDEX + 1))
+
+    print_module_progress "$MODULE_INDEX" "$MODULE_TOTAL" "$name" "$desc"
+
     # 检查是否已经完成（除非强制模式）
     if [ "$FORCE_MODE" = false ] && [ "$(state_get "$name")" = "done" ]; then
-        log_info "跳过模块 $name: 已完成 ($desc)"
+        print_module_result "skipped" "$name" "已完成"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        MODULE_SUMMARY_LINES+="  ${YELLOW}~${NC} ${name}"$'\n'
         continue
     fi
-    
-    log_info "开始执行模块: $name - $desc"
-    
-    # 导入模块文件
+
     module_file="${MODULE_FILES[$name]}"
     if [ ! -f "$module_file" ]; then
         log_error "模块文件不存在: $module_file"
+        state_set "$name" "failed"
+        print_module_result "failed" "$name" "模块文件缺失"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        MODULE_SUMMARY_LINES+="  ${RED}✗${NC} ${name}"$'\n'
         continue
     fi
-    
-    # 在子shell中源模块以隔离环境（但我们需要变量可见，所以直接source）
-    # 实际上，我们希望模块在当前shell中执行，以便它们可以修改状态和访问导出的变量
+
     if [ "$DRY_RUN" = true ]; then
         log_info "[试运行] 将执行模块: $module_file"
-        # 这里我们可以尝试只 source 但不执行 main 函数？简单起见，我们只提示
+        print_module_result "skipped" "$name" "dry-run"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        MODULE_SUMMARY_LINES+="  ${YELLOW}~${NC} ${name} (dry-run)"$'\n'
         continue
     fi
-    
-    # source 模块
-    # 注意：模块应该定义了 _info, _prerequisites, _main 函数
-    # 我们假设它们已经通过 source 加载到当前shell中
+
     if ! source "$module_file"; then
         log_error "无法加载模块文件: $module_file"
+        state_set "$name" "failed"
+        print_module_result "failed" "$name" "加载失败"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        MODULE_SUMMARY_LINES+="  ${RED}✗${NC} ${name}"$'\n'
         continue
     fi
 
     # 定位模块函数前缀，例如 00_preflight -> preflight
     function_prefix="${name:3}"
 
-    # 调用先决条件（如果存在）
     if declare -f "${function_prefix}_prerequisites" > /dev/null; then
         if ! "${function_prefix}_prerequisites"; then
             log_warn "模块 $name 的先决条件检查失败，跳过该模块。"
+            state_set "$name" "skipped"
+            print_module_result "skipped" "$name" "先决条件失败"
+            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+            MODULE_SUMMARY_LINES+="  ${YELLOW}~${NC} ${name}"$'\n'
             continue
         fi
     fi
 
-    # 执行主函数
     if declare -f "${function_prefix}_main" > /dev/null; then
         if "${function_prefix}_main"; then
             state_set "$name" "done"
-            log_info "模块 $name 执行成功"
+            print_module_result "done" "$name"
+            DONE_COUNT=$((DONE_COUNT + 1))
+            MODULE_SUMMARY_LINES+="  ${GREEN}✓${NC} ${name}"$'\n'
         else
             state_set "$name" "failed"
-            log_error "模块 $name 执行失败"
-            # 根据需求决定是否继续还是退出
-            # 这里我们继续执行其他模块
+            print_module_result "failed" "$name" "详见日志"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            MODULE_SUMMARY_LINES+="  ${RED}✗${NC} ${name}"$'\n'
         fi
     else
         log_warn "模块 $name 没有定义 _main 函数，跳过。"
+        state_set "$name" "skipped"
+        print_module_result "skipped" "$name" "无 _main"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        MODULE_SUMMARY_LINES+="  ${YELLOW}~${NC} ${name}"$'\n'
     fi
 done
 
 # 计算耗时
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))
-HOURS=$((ELAPSED / 3600))
-MINUTES=$(( (ELAPSED % 3600) / 60 ))
-SECONDS=$((ELAPSED % 60))
 
-# 显示完成摘要
+MODULE_SUMMARY_LINES+=$'\n'"  合计: ${GREEN}✓ ${DONE_COUNT}${NC}  ${RED}✗ ${FAILED_COUNT}${NC}  ${YELLOW}~ ${SKIPPED_COUNT}${NC}"
+
+# 探测 IP 并写结果文件
+SERVER_IP="$(detect_server_ip || true)"
 if [ "$DRY_RUN" = false ]; then
-    msg_box "安装完成" "所有选定的模块已处理完毕！\\n\\n总耗时: ${HOURS}小时 ${MINUTES}分钟 ${SECONDS}秒\\n\\n详细日志请查看: $LOG_FILE"
-else
-    msg_box "试运行完成" "试运行已完成。未实际执行任何修改。"
+    write_install_result "${INSTALL_RESULT_FILE}" "${SERVER_IP}" "${ELAPSED}"
+fi
+
+# 完成卡片
+print_completion_card "${ELAPSED}" "${DRY_RUN}" "${SERVER_IP}" "${MODULE_SUMMARY_LINES}"
+
+if [ "$FAILED_COUNT" -gt 0 ] && [ "$DRY_RUN" = false ]; then
+    exit 1
 fi
 
 exit 0
