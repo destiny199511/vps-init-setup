@@ -62,17 +62,24 @@ done
 
 # 用户交互提示函数
 NON_INTERACTIVE=false
+
+# prompt_or_default VAR_NAME "提示文案" "默认值" [ENV_NAME]
 prompt_or_default() {
     local __var="$1" __prompt="$2" __default="$3" __env="${4:-$1}"
     if [ "$NON_INTERACTIVE" = true ]; then
         printf -v "$__var" '%s' "${!__env:-$__default}"
+        return 0
     else
         local answer
-        read -rp "$__prompt [$__default]: " answer
+        read -r -p "$__prompt [默认: $__default] (输入 b 返回): " answer
+        if [ "$answer" = "b" ] || [ "$answer" = "back" ]; then
+            return 2
+        fi
         if [ -z "$answer" ]; then
             answer="$__default"
         fi
         printf -v "$__var" '%s' "$answer"
+        return 0
     fi
 }
 
@@ -86,93 +93,112 @@ msg_box() {
     echo
 }
 
+# yesno_box "标题" "提示文案" [default_yn]
 yesno_box() {
-    local prompt
-    if [ $# -eq 1 ]; then
-        prompt="$1"
-    else
-        prompt="$2"
-    fi
-    local default="y"
-    local env_name=""
-    if [ $# -ge 3 ]; then
-        env_name="$3"
-    fi
+    local title="$1"
+    local prompt="${2:-$1}"
+    local default="${3:-y}"
 
     if [ "$NON_INTERACTIVE" = true ]; then
-        local answer="${!env_name:-$default}"
-        case "$answer" in
+        case "$default" in
             [Yy1]|[Yy][eE][sS]) return 0 ;;
             *) return 1 ;;
         esac
     else
         local answer
+        local hint="[Y/n]"
+        [ "$default" = "n" ] && hint="[y/N]"
+        echo -e "${CYAN}--- ${title} ---${NC}"
+        echo -e "  1) 是 (Yes)"
+        echo -e "  2) 否 (No)"
+        echo -e "  b) 返回上一步"
         while true; do
-            read -rp "$prompt [y/n] ($default): " answer
+            read -r -p "$prompt (选择 1/2 或 $hint, 默认: $default): " answer
+            if [ "$answer" = "b" ] || [ "$answer" = "back" ]; then
+                return 2
+            fi
             if [ -z "$answer" ]; then
                 answer="$default"
             fi
             case "$answer" in
-                [Yy]|[Yy][eE][sS]) return 0 ;;
-                [Nn]|[Nn][oO]) return 1 ;;
-                *) echo "请输入 y 或 n" ;;
+                1|[Yy]|[Yy][eE][sS]) return 0 ;;
+                2|[Nn]|[Nn][oO]) return 1 ;;
+                *) echo -e "${RED}请输入 1(是) 或 2(否)，或输入 b 返回${NC}" ;;
             esac
         done
     fi
 }
 
+# input_box VAR_NAME "提示文案" "默认值"
 input_box() {
-    local title="$1"
+    local __var="$1"
     local prompt="$2"
     local default="$3"
-    local var
-    prompt_or_default var "$prompt" "$default"
-    printf '%s' "$var"
+    prompt_or_default "$__var" "$prompt" "$default"
 }
 
+# password_box VAR_NAME "提示文案"
 password_box() {
-    local prompt="$1"
-    local env_name="${2:-}"
+    local __var="$1"
+    local prompt="$2"
 
     if [ "$NON_INTERACTIVE" = true ]; then
-        if [ -n "$env_name" ]; then
-            printf '%s' "${!env_name:-}"
-        else
-            echo
-        fi
+        printf -v "$__var" '%s' ""
+        return 0
     else
         local password
-        read -rsp "$prompt: " password
+        read -rsp "$prompt (输入 b 返回): " password
         echo
-        printf '%s' "$password"
+        if [ "$password" = "b" ] || [ "$password" = "back" ]; then
+            return 2
+        fi
+        printf -v "$__var" '%s' "$password"
+        return 0
     fi
 }
 
+# menu_select VAR_NAME "标题" "提示文案" default_index option1 option2 ...
 menu_select() {
-    local title="$1"
-    local prompt="$2"
-    shift 2
+    local __var="$1"
+    local title="$2"
+    local prompt="$3"
+    local default_idx="$4"
+    shift 4
     local options=("$@")
+
     if [ "$NON_INTERACTIVE" = true ]; then
-        printf '%s' "${options[0]}"
+        local def_val="${options[$((default_idx - 1))]}"
+        printf -v "$__var" '%s' "$def_val"
+        return 0
     else
+        echo -e "${CYAN}=== ${title} ===${NC}"
         echo "$prompt"
         local index=1
         for opt in "${options[@]}"; do
-            echo "  $index) $opt"
+            local mark=""
+            if [ "$index" -eq "$default_idx" ]; then
+                mark=" [默认]"
+            fi
+            echo -e "  $index) $opt$mark"
             index=$((index + 1))
         done
+        echo -e "  b) 返回上一步"
+
         local choice
         while true; do
-            read -rp "请选择 [1-$((index - 1))] (默认: 1): " choice
+            read -r -p "请选择 [1-$((index - 1))] (默认: $default_idx, 输入 b 返回): " choice
+            if [ "$choice" = "b" ] || [ "$choice" = "back" ]; then
+                return 2
+            fi
             if [ -z "$choice" ]; then
-                choice=1
+                choice="$default_idx"
             fi
             if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt "$index" ]; then
-                printf '%s' "${options[choice-1]}"
+                local selected_val="${options[$((choice - 1))]}"
+                printf -v "$__var" '%s' "$selected_val"
                 return 0
             fi
-            echo "请输入有效的数字。"
+            echo -e "${RED}请输入有效的数字编号 (1-$((index - 1))) 或输入 b 返回${NC}"
         done
     fi
 }
@@ -182,21 +208,83 @@ menu_select() {
 
 # 配置系统设置
 configure_system() {
-    local hostname timezone locale primary_dns secondary_dns
-
     print_step "1/${WIZARD_TOTAL_STEPS}" "系统基础配置"
-    echo -e "${DIM}设置主机名、时区、语言环境与 DNS${NC}"
+    echo -e "${DIM}设置主机名、时区、语言环境与 DNS (输入 b 可随时返回)${NC}"
 
-    hostname=$(input_box "系统主机名" "请输入主机名:" "${HOSTNAME:-my-vps-server}")
-    while ! validate_hostname "$hostname" 2>/dev/null; do
-        echo -e "${RED}主机名格式无效，请重试。${NC}"
-        hostname=$(input_box "系统主机名" "请输入主机名:" "${HOSTNAME:-my-vps-server}")
+    local sub_step=1
+    local hostname="${HOSTNAME:-my-vps-server}"
+    local timezone="${TIMEZONE:-Asia/Shanghai}"
+    local locale="${LOCALE:-zh_CN.UTF-8}"
+    local primary_dns="${PRIMARY_DNS:-1.1.1.1}"
+    local secondary_dns="${SECONDARY_DNS:-8.8.8.8}"
+    local res
+
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 5 ]; do
+        case "$sub_step" in
+            1)
+                input_box hostname "请输入主机名:" "$hostname"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                if ! validate_hostname "$hostname" 2>/dev/null; then
+                    echo -e "${RED}主机名格式无效，请重试。${NC}"
+                    continue
+                fi
+                sub_step=2
+                ;;
+            2)
+                local tz_choice
+                menu_select tz_choice "系统时区" "请选择系统时区:" 1 \
+                    "Asia/Shanghai (中国标准时间)" \
+                    "UTC (协调世界时)" \
+                    "America/New_York (美国东部时间)" \
+                    "Europe/London (英国时间)" \
+                    "手动输入自定义时区"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                case "$tz_choice" in
+                    "Asia/Shanghai"*) timezone="Asia/Shanghai" ;;
+                    "UTC"*) timezone="UTC" ;;
+                    "America/New_York"*) timezone="America/New_York" ;;
+                    "Europe/London"*) timezone="Europe/London" ;;
+                    "手动输入"*)
+                        input_box timezone "请输入自定义时区:" "$timezone"
+                        [ $? -eq 2 ] && continue
+                        ;;
+                esac
+                sub_step=3
+                ;;
+            3)
+                local loc_choice
+                menu_select loc_choice "语言环境" "请选择 Locale:" 1 \
+                    "zh_CN.UTF-8 (中文简体)" \
+                    "en_US.UTF-8 (English)" \
+                    "手动输入自定义 Locale"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                case "$loc_choice" in
+                    "zh_CN.UTF-8"*) locale="zh_CN.UTF-8" ;;
+                    "en_US.UTF-8"*) locale="en_US.UTF-8" ;;
+                    "手动输入"*)
+                        input_box locale "请输入自定义 Locale:" "$locale"
+                        [ $? -eq 2 ] && continue
+                        ;;
+                esac
+                sub_step=4
+                ;;
+            4)
+                input_box primary_dns "请输入首选 DNS 服务器:" "$primary_dns"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=3; continue; }
+                sub_step=5
+                ;;
+            5)
+                input_box secondary_dns "请输入备用 DNS 服务器:" "$secondary_dns"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=4; continue; }
+                sub_step=6
+                ;;
+        esac
     done
-
-    timezone=$(input_box "时区" "请输入时区 (例如: Asia/Shanghai):" "${TIMEZONE:-Asia/Shanghai}")
-    locale=$(input_box "语言环境" "请输入语言环境 (例如: zh_CN.UTF-8):" "${LOCALE:-zh_CN.UTF-8}")
-    primary_dns=$(input_box "首选DNS" "请输入首选DNS服务器:" "${PRIMARY_DNS:-1.1.1.1}")
-    secondary_dns=$(input_box "备用DNS" "请输入备用DNS服务器:" "${SECONDARY_DNS:-8.8.8.8}")
 
     export HOSTNAME="$hostname"
     export TIMEZONE="$timezone"
@@ -209,30 +297,60 @@ configure_system() {
 
 # 配置用户设置
 configure_user() {
-    local username ssh_pubkey_auth ssh_pubkey password_auth
-
     print_step "2/${WIZARD_TOTAL_STEPS}" "用户账户配置"
-    echo -e "${DIM}创建非 root 管理用户，并配置登录方式${NC}"
+    echo -e "${DIM}创建非 root 管理用户，并配置登录机制 (输入 b 可返回)${NC}"
 
-    username=$(input_box "普通用户名" "请输入普通用户名:" "${USERNAME:-appadmin}")
+    local sub_step=1
+    local username="${USERNAME:-appadmin}"
+    local ssh_pubkey_auth="${SSH_PUBKEY_AUTH:-yes}"
+    local ssh_pubkey="${SSH_PUBKEY:-}"
+    local password_auth="${PASSWORD_AUTH:-no}"
+    local res
 
-    if yesno_box "SSH公钥认证" "是否使用SSH公钥认证？(如果选择否，将使用密码认证)"; then
-        ssh_pubkey_auth="yes"
-        ssh_pubkey=$(input_box "SSH公钥" "请输入SSH公钥（可以为空，则自动生成密钥对）:" "${SSH_PUBKEY:-}")
-    else
-        ssh_pubkey_auth="no"
-        ssh_pubkey=""
-    fi
-
-    if [ "$ssh_pubkey_auth" = "no" ]; then
-        password_auth="yes"
-    else
-        if yesno_box "密码认证" "是否允许密码认证？（不推荐，但有时必要）"; then
-            password_auth="yes"
-        else
-            password_auth="no"
-        fi
-    fi
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 3 ]; do
+        case "$sub_step" in
+            1)
+                input_box username "请输入普通用户名:" "$username"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                sub_step=2
+                ;;
+            2)
+                local auth_choice
+                menu_select auth_choice "SSH 认证模式" "请选择 SSH 登录验证机制:" 1 \
+                    "使用 SSH 公钥认证 (推荐安全方案)" \
+                    "使用密码认证 (不推荐)" \
+                    "同时允许公钥与密码认证"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                case "$auth_choice" in
+                    "使用 SSH 公钥认证"*)
+                        ssh_pubkey_auth="yes"
+                        password_auth="no"
+                        ;;
+                    "使用密码认证"*)
+                        ssh_pubkey_auth="no"
+                        password_auth="yes"
+                        ;;
+                    "同时允许"*)
+                        ssh_pubkey_auth="yes"
+                        password_auth="yes"
+                        ;;
+                esac
+                sub_step=3
+                ;;
+            3)
+                if [ "$ssh_pubkey_auth" = "yes" ]; then
+                    input_box ssh_pubkey "请输入 SSH 公钥 (留空则安装时自动生成密钥对):" "$ssh_pubkey"
+                    res=$?
+                    [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                else
+                    ssh_pubkey=""
+                fi
+                sub_step=4
+                ;;
+        esac
+    done
 
     export USERNAME="$username"
     export SSH_PUBKEY_AUTHENTICATION="$ssh_pubkey_auth"
@@ -245,45 +363,85 @@ configure_user() {
 
 # 配置SSH设置
 configure_ssh() {
-    local ssh_port permit_root_login max_auth_tries client_alive_interval client_alive_count_max login_grace_time
-
     print_step "3/${WIZARD_TOTAL_STEPS}" "SSH 加固配置"
-    echo -e "${DIM}建议使用非 22 端口，并限制 root 密码登录${NC}"
+    echo -e "${DIM}建议使用非 22 端口，并限制 root 密码登录 (输入 b 可返回)${NC}"
 
-    ssh_port=$(input_box "SSH端口" "请输入SSH端口号:" "${SSH_PORT:-24822}")
-    while ! validate_port "$ssh_port" 2>/dev/null; do
-        echo -e "${RED}端口号无效（1-65535），请重试。${NC}"
-        ssh_port=$(input_box "SSH端口" "请输入SSH端口号:" "${SSH_PORT:-24822}")
-    done
+    local sub_step=1
+    local ssh_port="${SSH_PORT:-24822}"
+    local permit_root_login="${PERMIT_ROOT_LOGIN:-no}"
+    local max_auth_tries="${SSH_MAX_AUTH_TRIES:-3}"
+    local client_alive_interval="${SSH_CLIENT_ALIVE_INTERVAL:-300}"
+    local client_alive_count_max="${SSH_CLIENT_ALIVE_COUNT_MAX:-2}"
+    local login_grace_time="${SSH_LOGIN_GRACE_TIME:-60}"
+    local res
 
-    if yesno_box "Root 登录" "是否允许 root 通过 SSH 登录？（生产环境建议 no）"; then
-        permit_root_login="yes"
-    else
-        permit_root_login="no"
-    fi
-
-    max_auth_tries=$(input_box "最大认证尝试次数" "请输入最大认证尝试次数:" "${SSH_MAX_AUTH_TRIES:-3}")
-    while ! validate_number "$max_auth_tries" 2>/dev/null; do
-        echo -e "${RED}请输入有效数字。${NC}"
-        max_auth_tries=$(input_box "最大认证尝试次数" "请输入最大认证尝试次数:" "${SSH_MAX_AUTH_TRIES:-3}")
-    done
-
-    client_alive_interval=$(input_box "客户端保活间隔" "请输入客户端保活间隔(秒):" "${SSH_CLIENT_ALIVE_INTERVAL:-300}")
-    while ! validate_number "$client_alive_interval" 2>/dev/null; do
-        echo -e "${RED}请输入有效数字。${NC}"
-        client_alive_interval=$(input_box "客户端保活间隔" "请输入客户端保活间隔(秒):" "${SSH_CLIENT_ALIVE_INTERVAL:-300}")
-    done
-
-    client_alive_count_max=$(input_box "客户端保活计数最大值" "请输入客户端保活计数最大值:" "${SSH_CLIENT_ALIVE_COUNT_MAX:-2}")
-    while ! validate_number "$client_alive_count_max" 2>/dev/null; do
-        echo -e "${RED}请输入有效数字。${NC}"
-        client_alive_count_max=$(input_box "客户端保活计数最大值" "请输入客户端保活计数最大值:" "${SSH_CLIENT_ALIVE_COUNT_MAX:-2}")
-    done
-
-    login_grace_time=$(input_box "登录宽限时间" "请输入登录宽限时间(秒):" "${SSH_LOGIN_GRACE_TIME:-60}")
-    while ! validate_number "$login_grace_time" 2>/dev/null; do
-        echo -e "${RED}请输入有效数字。${NC}"
-        login_grace_time=$(input_box "登录宽限时间" "请输入登录宽限时间(秒):" "${SSH_LOGIN_GRACE_TIME:-60}")
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 6 ]; do
+        case "$sub_step" in
+            1)
+                input_box ssh_port "请输入 SSH 端口号 (1-65535):" "$ssh_port"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                if ! validate_port "$ssh_port" 2>/dev/null; then
+                    echo -e "${RED}端口号无效（必须在 1-65535 之间），请重试。${NC}"
+                    continue
+                fi
+                sub_step=2
+                ;;
+            2)
+                local root_choice
+                menu_select root_choice "Root 登录权限" "是否允许 root 用户通过 SSH 直接登录？" 1 \
+                    "禁止 root 登录 (no) [推荐生产安全]" \
+                    "允许 root 登录 (yes)"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                if [[ "$root_choice" =~ "允许" ]]; then
+                    permit_root_login="yes"
+                else
+                    permit_root_login="no"
+                fi
+                sub_step=3
+                ;;
+            3)
+                input_box max_auth_tries "请输入最大认证尝试次数 (MaxAuthTries):" "$max_auth_tries"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                if ! validate_number "$max_auth_tries" 2>/dev/null; then
+                    echo -e "${RED}请输入有效数字。${NC}"
+                    continue
+                fi
+                sub_step=4
+                ;;
+            4)
+                input_box client_alive_interval "请输入客户端保活间隔 (ClientAliveInterval, 秒):" "$client_alive_interval"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=3; continue; }
+                if ! validate_number "$client_alive_interval" 2>/dev/null; then
+                    echo -e "${RED}请输入有效数字。${NC}"
+                    continue
+                fi
+                sub_step=5
+                ;;
+            5)
+                input_box client_alive_count_max "请输入保活探测最大次数 (ClientAliveCountMax):" "$client_alive_count_max"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=4; continue; }
+                if ! validate_number "$client_alive_count_max" 2>/dev/null; then
+                    echo -e "${RED}请输入有效数字。${NC}"
+                    continue
+                fi
+                sub_step=6
+                ;;
+            6)
+                input_box login_grace_time "请输入登录宽限时间 (LoginGraceTime, 秒):" "$login_grace_time"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=5; continue; }
+                if ! validate_number "$login_grace_time" 2>/dev/null; then
+                    echo -e "${RED}请输入有效数字。${NC}"
+                    continue
+                fi
+                sub_step=7
+                ;;
+        esac
     done
 
     export SSH_PORT="$ssh_port"
@@ -298,28 +456,40 @@ configure_ssh() {
 
 # 配置安全设置
 configure_security() {
-    local install_fail2ban install_auditd enable_selinux_check
-
     print_step "4/${WIZARD_TOTAL_STEPS}" "安全组件配置"
-    echo -e "${DIM}Fail2ban / 审计 / MAC 策略检查${NC}"
+    echo -e "${DIM}Fail2ban / 审计系统 / 强制访问控制策略 (输入 b 可返回)${NC}"
 
-    if yesno_box "安装Fail2Ban" "是否安装并配置 Fail2Ban 防暴力破解？（推荐）"; then
-        install_fail2ban="true"
-    else
-        install_fail2ban="false"
-    fi
+    local sub_step=1
+    local install_fail2ban="${INSTALL_FAIL2BAN:-true}"
+    local install_auditd="${INSTALL_AUDITD:-false}"
+    local enable_selinux_check="${ENABLE_SELINUX_CHECK:-true}"
+    local res
 
-    if yesno_box "启用审计日志" "是否启用 auditd 记录系统调用和用户行为？"; then
-        install_auditd="true"
-    else
-        install_auditd="false"
-    fi
-
-    if yesno_box "检查SELinux/AppArmor" "是否检查并配置 MAC 策略（SELinux/AppArmor）？"; then
-        enable_selinux_check="true"
-    else
-        enable_selinux_check="false"
-    fi
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 3 ]; do
+        case "$sub_step" in
+            1)
+                yesno_box "Fail2ban 防爆破" "是否安装配置 Fail2ban 防暴力破解工具？" "${install_fail2ban:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                [ "$res" -eq 0 ] && install_fail2ban="true" || install_fail2ban="false"
+                sub_step=2
+                ;;
+            2)
+                yesno_box "auditd 审计" "是否安装并启用 auditd 系统审计框架？" "${install_auditd:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                [ "$res" -eq 0 ] && install_auditd="true" || install_auditd="false"
+                sub_step=3
+                ;;
+            3)
+                yesno_box "MAC 策略检查" "是否检查并配置 SELinux / AppArmor 安全策略？" "${enable_selinux_check:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                [ "$res" -eq 0 ] && enable_selinux_check="true" || enable_selinux_check="false"
+                sub_step=4
+                ;;
+        esac
+    done
 
     export INSTALL_FAIL2BAN="$install_fail2ban"
     export INSTALL_AUDITD="$install_auditd"
@@ -330,22 +500,32 @@ configure_security() {
 
 # 配置服务设置
 configure_services() {
-    local install_docker install_npm
+    print_step "5/${WIZARD_TOTAL_STEPS}" "可选服务配置"
+    echo -e "${DIM}Docker / Node.js(npm) 基础运行时环境 (输入 b 可返回)${NC}"
 
-    print_step "5/${WIZARD_TOTAL_STEPS}" "可选服务安装"
-    echo -e "${DIM}Docker / Node.js(npm) 等运行时${NC}"
+    local sub_step=1
+    local install_docker="${INSTALL_DOCKER:-true}"
+    local install_npm="${INSTALL_NPM:-false}"
+    local res
 
-    if yesno_box "安装Docker" "是否安装 Docker 引擎？"; then
-        install_docker="true"
-    else
-        install_docker="false"
-    fi
-
-    if yesno_box "安装NPM" "是否安装 Node.js 与 npm？"; then
-        install_npm="true"
-    else
-        install_npm="false"
-    fi
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 2 ]; do
+        case "$sub_step" in
+            1)
+                yesno_box "Docker 引擎" "是否自动安装与配置 Docker 容器引擎？" "${install_docker:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                [ "$res" -eq 0 ] && install_docker="true" || install_docker="false"
+                sub_step=2
+                ;;
+            2)
+                yesno_box "Node.js & npm" "是否安装 Node.js 与 npm 包管理器？" "${install_npm:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                [ "$res" -eq 0 ] && install_npm="true" || install_npm="false"
+                sub_step=3
+                ;;
+        esac
+    done
 
     export INSTALL_DOCKER="$install_docker"
     export INSTALL_NPM="$install_npm"
@@ -355,24 +535,38 @@ configure_services() {
 
 # 配置备份和监控
 configure_backup_monitoring() {
-    local enable_backup enable_monitoring
+    print_step "6/${WIZARD_TOTAL_STEPS}" "备份与监控配置"
+    echo -e "${DIM}系统定时备份、Node Exporter 监控组件 (输入 b 可返回)${NC}"
 
-    print_step "6/${WIZARD_TOTAL_STEPS}" "备份与监控"
-    echo -e "${DIM}可选：自动备份、Netdata/Node Exporter${NC}"
+    local sub_step=1
+    local enable_backup="${ENABLE_BACKUP:-false}"
+    local enable_monitoring="${ENABLE_MONITORING:-false}"
+    local res
 
-    if yesno_box "启用备份" "是否启用自动备份系统？"; then
-        enable_backup="true"
-    else
-        enable_backup="false"
-    fi
-
-    if yesno_box "启用监控" "是否安装系统监控工具（如 Netdata 或 Node Exporter）？"; then
-        enable_monitoring="true"
-        export INSTALL_NODE_EXPORTER="true"
-    else
-        enable_monitoring="false"
-        export INSTALL_NODE_EXPORTER="false"
-    fi
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 2 ]; do
+        case "$sub_step" in
+            1)
+                yesno_box "定时备份" "是否配置自动化备份任务？" "${enable_backup:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                [ "$res" -eq 0 ] && enable_backup="true" || enable_backup="false"
+                sub_step=2
+                ;;
+            2)
+                yesno_box "监控组件" "是否部署 Prometheus Node Exporter 系统监控组件？" "${enable_monitoring:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                if [ "$res" -eq 0 ]; then
+                    enable_monitoring="true"
+                    export INSTALL_NODE_EXPORTER="true"
+                else
+                    enable_monitoring="false"
+                    export INSTALL_NODE_EXPORTER="false"
+                fi
+                sub_step=3
+                ;;
+        esac
+    done
 
     export ENABLE_BACKUP="$enable_backup"
     export ENABLE_MONITORING="$enable_monitoring"
@@ -382,46 +576,64 @@ configure_backup_monitoring() {
 
 # 配置系统清洗和优化
 configure_cleanup() {
-    local enable_swap remove_snap clean_pkg_cache clean_journal disable_services clean_temp
-
     print_step "7/${WIZARD_TOTAL_STEPS}" "系统清理与优化"
-    echo -e "${DIM}Swap / Snap / 缓存 / 日志 / 无用服务${NC}"
+    echo -e "${DIM}Swap 交换空间 / Snap / 软件包缓存 / 日志限制 (输入 b 可返回)${NC}"
 
-    if yesno_box "创建Swap" "是否自动创建 Swap？（内存 ≤2G 推荐）"; then
-        enable_swap="true"
-    else
-        enable_swap="false"
-    fi
+    local sub_step=1
+    local enable_swap="${ENABLE_SWAP:-true}"
+    local remove_snap="${REMOVE_SNAP:-false}"
+    local clean_pkg_cache="${CLEAN_PKG_CACHE:-true}"
+    local clean_journal="${CLEAN_JOURNAL:-true}"
+    local disable_services="${DISABLE_SERVICES:-false}"
+    local clean_temp="${CLEAN_TEMP:-true}"
+    local res
 
-    if yesno_box "卸载Snap" "是否卸载 snap 并阻止其重新安装？（仅 Ubuntu）"; then
-        remove_snap="true"
-    else
-        remove_snap="false"
-    fi
-
-    if yesno_box "清理包缓存" "是否清理包管理器缓存并移除旧内核？"; then
-        clean_pkg_cache="true"
-    else
-        clean_pkg_cache="false"
-    fi
-
-    if yesno_box "清理日志" "是否清理 systemd 日志并限制容量（200MB/7天）？"; then
-        clean_journal="true"
-    else
-        clean_journal="false"
-    fi
-
-    if yesno_box "禁用无用服务" "是否禁用不必要的服务以节省资源？"; then
-        disable_services="true"
-    else
-        disable_services="false"
-    fi
-
-    if yesno_box "清理临时文件" "是否清理 /tmp 和旧日志文件？"; then
-        clean_temp="true"
-    else
-        clean_temp="false"
-    fi
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 6 ]; do
+        case "$sub_step" in
+            1)
+                yesno_box "Swap 交换空间" "是否自动分配与配置 Swap 交换分区？(内存 ≤2G 推荐)" "${enable_swap:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && return 2
+                [ "$res" -eq 0 ] && enable_swap="true" || enable_swap="false"
+                sub_step=2
+                ;;
+            2)
+                yesno_box "Snap 卸载" "是否彻底卸载 Snap 软件包管理器？(仅 Ubuntu 有效)" "${remove_snap:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                [ "$res" -eq 0 ] && remove_snap="true" || remove_snap="false"
+                sub_step=3
+                ;;
+            3)
+                yesno_box "包缓存清理" "是否清理 APT/YUM 包管理器缓存并移除旧内核？" "${clean_pkg_cache:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                [ "$res" -eq 0 ] && clean_pkg_cache="true" || clean_pkg_cache="false"
+                sub_step=4
+                ;;
+            4)
+                yesno_box "systemd 日志限制" "是否清理旧日志并将日志上限限制为 200MB/7天？" "${clean_journal:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=3; continue; }
+                [ "$res" -eq 0 ] && clean_journal="true" || clean_journal="false"
+                sub_step=5
+                ;;
+            5)
+                yesno_box "无用服务禁用" "是否自动停用与禁用不必要的后台服务？" "${disable_services:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=4; continue; }
+                [ "$res" -eq 0 ] && disable_services="true" || disable_services="false"
+                sub_step=6
+                ;;
+            6)
+                yesno_box "临时文件清理" "是否清理 /tmp 临时文件及系统临时日志？" "${clean_temp:0:1}"
+                res=$?
+                [ "$res" -eq 2 ] && { sub_step=5; continue; }
+                [ "$res" -eq 0 ] && clean_temp="true" || clean_temp="false"
+                sub_step=7
+                ;;
+        esac
+    done
 
     export ENABLE_SWAP="$enable_swap"
     export REMOVE_SNAP="$remove_snap"
@@ -435,51 +647,142 @@ configure_cleanup() {
 
 # 主配置向导
 run_configuration_wizard() {
-    print_section "欢迎使用 VPS 一键装机"
-    echo -e "本向导将分 ${WIZARD_TOTAL_STEPS} 步收集配置。"
-    echo -e "直接回车 = 接受默认值；也可稍后在 Review 中确认。"
+    local current_step=1
+    local total_steps="${WIZARD_TOTAL_STEPS:-7}"
+
+    print_section "欢迎使用 VPS 一键装机配置向导"
+    echo -e "本向导将分 ${total_steps} 步收集系统配置。"
+    echo -e "提示：直接回车 = 选择 [默认值]；输入 'b' 或 'back' 可随时返回上一步。"
     echo -e "${GREEN}═══════════════════════════════════════════${NC}"
 
-    if ! configure_system; then
-        msg_box "错误" "系统配置过程中发生错误。"
-        return 1
-    fi
+    while [ "$current_step" -ge 1 ] && [ "$current_step" -le "$total_steps" ]; do
+        local res=0
+        case "$current_step" in
+            1) configure_system; res=$? ;;
+            2) configure_user; res=$? ;;
+            3) configure_ssh; res=$? ;;
+            4) configure_security; res=$? ;;
+            5) configure_services; res=$? ;;
+            6) configure_backup_monitoring; res=$? ;;
+            7) configure_cleanup; res=$? ;;
+        esac
 
-    if ! configure_user; then
-        msg_box "错误" "用户配置过程中发生错误。"
-        return 1
-    fi
-
-    if ! configure_ssh; then
-        msg_box "错误" "SSH配置过程中发生错误。"
-        return 1
-    fi
-
-    if ! configure_security; then
-        msg_box "错误" "安全配置过程中发生错误。"
-        return 1
-    fi
-
-    if ! configure_services; then
-        msg_box "错误" "服务配置过程中发生错误。"
-        return 1
-    fi
-
-    if ! configure_backup_monitoring; then
-        msg_box "错误" "备份和监控配置过程中发生错误。"
-        return 1
-    fi
-
-    if ! configure_cleanup; then
-        msg_box "错误" "清洗优化配置过程中发生错误。"
-        return 1
-    fi
+        if [ "$res" -eq 2 ]; then
+            if [ "$current_step" -gt 1 ]; then
+                current_step=$((current_step - 1))
+                echo -e "\n${YELLOW}<< 已返回上一步 (Step ${current_step})${NC}"
+            else
+                echo -e "\n${YELLOW}已处于第一步，无法继续回退。${NC}"
+            fi
+        elif [ "$res" -ne 0 ]; then
+            msg_box "错误" "配置向导提前结束。"
+            return 1
+        else
+            current_step=$((current_step + 1))
+        fi
+    done
 
     print_section "配置采集完成"
-    echo -e "即将保存配置并进入安装前确认。"
+    echo -e "所有 ${total_steps} 个步骤已完成！系统已更新配置。"
     echo -e "${GREEN}═══════════════════════════════════════════${NC}"
-
     return 0
+}
+
+# 模块化分项配置子菜单
+configure_by_sections() {
+    while true; do
+        print_section "模块化分项配置菜单"
+        echo -e "请选择需要单独配置或修改的项目:"
+        echo -e "  1) 系统基础配置 (Step 1: Hostname / Timezone / DNS)"
+        echo -e "  2) 用户账户配置 (Step 2: Username / SSH Key / Password)"
+        echo -e "  3) SSH 加固配置 (Step 3: SSH Port / Root Login)"
+        echo -e "  4) 安全组件配置 (Step 4: Fail2ban / Auditd / MAC)"
+        echo -e "  5) 可选服务配置 (Step 5: Docker / Node.js & NPM)"
+        echo -e "  6) 备份与监控配置 (Step 6: Backup / Node Exporter)"
+        echo -e "  7) 清理与优化配置 (Step 7: Swap / Snap / Cache / Journal)"
+        echo -e "  0) 返回主菜单"
+        echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+
+        local choice
+        read -r -p "请选择 [0-7] (默认: 0): " choice
+        choice="${choice:-0}"
+
+        case "$choice" in
+            1) configure_system ;;
+            2) configure_user ;;
+            3) configure_ssh ;;
+            4) configure_security ;;
+            5) configure_services ;;
+            6) configure_backup_monitoring ;;
+            7) configure_cleanup ;;
+            0|b|back) break ;;
+            *) echo -e "${RED}无效选项，请输入 0-7${NC}" ;;
+        esac
+
+        # 保存变更
+        # shellcheck disable=SC2046
+        save_config "$CONFIG_FILE" $(get_config_var_names)
+    done
+}
+
+# 交互式主菜单
+show_main_menu() {
+    while true; do
+        print_section "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单"
+        echo -e "请选择需要执行的操作:"
+        echo -e "  1) 完整向导配置 (Guided Setup Wizard) [默认推荐]"
+        echo -e "  2) 模块化分项配置 (Configure by Section)"
+        echo -e "  3) 预览当前配置 (Review Configuration)"
+        echo -e "  4) 加载 / 重置配置文件 (Manage Config File)"
+        echo -e "  5) 开始执行安装 (Start Installation)"
+        echo -e "  6) 查看模块执行状态 (Check Module Status)"
+        echo -e "  0) 退出程序 (Exit)"
+        echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+
+        local choice
+        read -r -p "请选择 [0-6] (默认: 1): " choice
+        choice="${choice:-1}"
+
+        case "$choice" in
+            1)
+                if run_configuration_wizard; then
+                    # shellcheck disable=SC2046
+                    save_config "$CONFIG_FILE" $(get_config_var_names)
+                    log_info "向导配置已保存至 $CONFIG_FILE"
+                fi
+                ;;
+            2)
+                configure_by_sections
+                ;;
+            3)
+                print_review_card "${#MODULES[@]}"
+                ;;
+            4)
+                if [ -f "$CONFIG_FILE" ]; then
+                    load_config "$CONFIG_FILE"
+                    apply_config_defaults
+                    log_info "已重新加载配置文件: $CONFIG_FILE"
+                else
+                    apply_config_defaults
+                    log_info "无已有配置文件，已应用默认配置。"
+                fi
+                ;;
+            5)
+                # 跳出主菜单，继续执行安装
+                return 0
+                ;;
+            6)
+                print_status_table MODULES
+                ;;
+            0|q|exit)
+                log_info "用户退出系统。"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}请输入有效的数字选项 [0-6]${NC}"
+                ;;
+        esac
+    done
 }
 
 # 安装前 Review；返回 0 表示继续，1 表示取消
@@ -607,12 +910,9 @@ if [ "$NON_INTERACTIVE" = true ]; then
     fi
 fi
 
-# 如果是交互模式，运行向导
+# 如果是交互模式，运行主菜单
 if [ "$ACTION" = "install" ] && [ "$INTERACTIVE_MODE" = true ]; then
-    if ! run_configuration_wizard; then
-        log_error "配置向导失败，退出。"
-        exit 1
-    fi
+    show_main_menu
     # 保存全部已知配置键
     # shellcheck disable=SC2046
     save_config "$CONFIG_FILE" $(get_config_var_names)
