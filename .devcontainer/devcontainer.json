@@ -1,0 +1,18 @@
+{
+    "name": "${localWorkspaceFolderBasename}",
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+    "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind",
+    "remoteUser": "vscode",
+    "mounts": [
+        "source=cache-${devcontainerId},target=/home/vscode/.cache,type=volume"
+    ],
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash"
+            }
+        }
+    },
+    "postCreateCommand": "git config --global --replace-all safe.directory ${containerWorkspaceFolder} 2>/dev/null || git config --global --add safe.directory ${containerWorkspaceFolder}"
+}

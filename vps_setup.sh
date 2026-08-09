@@ -217,13 +217,13 @@ configure_system() {
     local locale="${LOCALE:-zh_CN.UTF-8}"
     local primary_dns="${PRIMARY_DNS:-1.1.1.1}"
     local secondary_dns="${SECONDARY_DNS:-8.8.8.8}"
-    local res
+    local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 5 ]; do
         case "$sub_step" in
             1)
-                input_box hostname "请输入主机名:" "$hostname"
-                res=$?
+                res=0
+                input_box hostname "请输入主机名:" "$hostname" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 if ! validate_hostname "$hostname" 2>/dev/null; then
                     echo -e "${RED}主机名格式无效，请重试。${NC}"
@@ -232,54 +232,56 @@ configure_system() {
                 sub_step=2
                 ;;
             2)
-                local tz_choice
+                res=0
+                local tz_choice=""
                 menu_select tz_choice "系统时区" "请选择系统时区:" 1 \
                     "Asia/Shanghai (中国标准时间)" \
                     "UTC (协调世界时)" \
                     "America/New_York (美国东部时间)" \
                     "Europe/London (英国时间)" \
-                    "手动输入自定义时区"
-                res=$?
-                [ "$res" -eq 2 ] && return 2
+                    "手动输入自定义时区" || res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 case "$tz_choice" in
                     "Asia/Shanghai"*) timezone="Asia/Shanghai" ;;
                     "UTC"*) timezone="UTC" ;;
                     "America/New_York"*) timezone="America/New_York" ;;
                     "Europe/London"*) timezone="Europe/London" ;;
                     "手动输入"*)
-                        input_box timezone "请输入自定义时区:" "$timezone"
-                        [ $? -eq 2 ] && continue
+                        res=0
+                        input_box timezone "请输入自定义时区:" "$timezone" || res=$?
+                        [ "$res" -eq 2 ] && continue
                         ;;
                 esac
                 sub_step=3
                 ;;
             3)
-                local loc_choice
+                res=0
+                local loc_choice=""
                 menu_select loc_choice "语言环境" "请选择 Locale:" 1 \
                     "zh_CN.UTF-8 (中文简体)" \
                     "en_US.UTF-8 (English)" \
-                    "手动输入自定义 Locale"
-                res=$?
+                    "手动输入自定义 Locale" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=2; continue; }
                 case "$loc_choice" in
                     "zh_CN.UTF-8"*) locale="zh_CN.UTF-8" ;;
                     "en_US.UTF-8"*) locale="en_US.UTF-8" ;;
                     "手动输入"*)
-                        input_box locale "请输入自定义 Locale:" "$locale"
-                        [ $? -eq 2 ] && continue
+                        res=0
+                        input_box locale "请输入自定义 Locale:" "$locale" || res=$?
+                        [ "$res" -eq 2 ] && continue
                         ;;
                 esac
                 sub_step=4
                 ;;
             4)
-                input_box primary_dns "请输入首选 DNS 服务器:" "$primary_dns"
-                res=$?
+                res=0
+                input_box primary_dns "请输入首选 DNS 服务器:" "$primary_dns" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=3; continue; }
                 sub_step=5
                 ;;
             5)
-                input_box secondary_dns "请输入备用 DNS 服务器:" "$secondary_dns"
-                res=$?
+                res=0
+                input_box secondary_dns "请输入备用 DNS 服务器:" "$secondary_dns" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=4; continue; }
                 sub_step=6
                 ;;
@@ -305,23 +307,23 @@ configure_user() {
     local ssh_pubkey_auth="${SSH_PUBKEY_AUTH:-yes}"
     local ssh_pubkey="${SSH_PUBKEY:-}"
     local password_auth="${PASSWORD_AUTH:-no}"
-    local res
+    local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 3 ]; do
         case "$sub_step" in
             1)
-                input_box username "请输入普通用户名:" "$username"
-                res=$?
+                res=0
+                input_box username "请输入普通用户名:" "$username" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 sub_step=2
                 ;;
             2)
-                local auth_choice
+                res=0
+                local auth_choice=""
                 menu_select auth_choice "SSH 认证模式" "请选择 SSH 登录验证机制:" 1 \
                     "使用 SSH 公钥认证 (推荐安全方案)" \
                     "使用密码认证 (不推荐)" \
-                    "同时允许公钥与密码认证"
-                res=$?
+                    "同时允许公钥与密码认证" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 case "$auth_choice" in
                     "使用 SSH 公钥认证"*)
@@ -340,9 +342,9 @@ configure_user() {
                 sub_step=3
                 ;;
             3)
+                res=0
                 if [ "$ssh_pubkey_auth" = "yes" ]; then
-                    input_box ssh_pubkey "请输入 SSH 公钥 (留空则安装时自动生成密钥对):" "$ssh_pubkey"
-                    res=$?
+                    input_box ssh_pubkey "请输入 SSH 公钥 (留空则安装时自动生成密钥对):" "$ssh_pubkey" || res=$?
                     [ "$res" -eq 2 ] && { sub_step=2; continue; }
                 else
                     ssh_pubkey=""
@@ -373,13 +375,13 @@ configure_ssh() {
     local client_alive_interval="${SSH_CLIENT_ALIVE_INTERVAL:-300}"
     local client_alive_count_max="${SSH_CLIENT_ALIVE_COUNT_MAX:-2}"
     local login_grace_time="${SSH_LOGIN_GRACE_TIME:-60}"
-    local res
+    local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 6 ]; do
         case "$sub_step" in
             1)
-                input_box ssh_port "请输入 SSH 端口号 (1-65535):" "$ssh_port"
-                res=$?
+                res=0
+                input_box ssh_port "请输入 SSH 端口号 (1-65535):" "$ssh_port" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 if ! validate_port "$ssh_port" 2>/dev/null; then
                     echo -e "${RED}端口号无效（必须在 1-65535 之间），请重试。${NC}"
@@ -388,11 +390,11 @@ configure_ssh() {
                 sub_step=2
                 ;;
             2)
-                local root_choice
+                res=0
+                local root_choice=""
                 menu_select root_choice "Root 登录权限" "是否允许 root 用户通过 SSH 直接登录？" 1 \
                     "禁止 root 登录 (no) [推荐生产安全]" \
-                    "允许 root 登录 (yes)"
-                res=$?
+                    "允许 root 登录 (yes)" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 if [[ "$root_choice" =~ "允许" ]]; then
                     permit_root_login="yes"
@@ -402,8 +404,8 @@ configure_ssh() {
                 sub_step=3
                 ;;
             3)
-                input_box max_auth_tries "请输入最大认证尝试次数 (MaxAuthTries):" "$max_auth_tries"
-                res=$?
+                res=0
+                input_box max_auth_tries "请输入最大认证尝试次数 (MaxAuthTries):" "$max_auth_tries" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=2; continue; }
                 if ! validate_number "$max_auth_tries" 2>/dev/null; then
                     echo -e "${RED}请输入有效数字。${NC}"
@@ -412,8 +414,8 @@ configure_ssh() {
                 sub_step=4
                 ;;
             4)
-                input_box client_alive_interval "请输入客户端保活间隔 (ClientAliveInterval, 秒):" "$client_alive_interval"
-                res=$?
+                res=0
+                input_box client_alive_interval "请输入客户端保活间隔 (ClientAliveInterval, 秒):" "$client_alive_interval" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=3; continue; }
                 if ! validate_number "$client_alive_interval" 2>/dev/null; then
                     echo -e "${RED}请输入有效数字。${NC}"
@@ -422,8 +424,8 @@ configure_ssh() {
                 sub_step=5
                 ;;
             5)
-                input_box client_alive_count_max "请输入保活探测最大次数 (ClientAliveCountMax):" "$client_alive_count_max"
-                res=$?
+                res=0
+                input_box client_alive_count_max "请输入保活探测最大次数 (ClientAliveCountMax):" "$client_alive_count_max" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=4; continue; }
                 if ! validate_number "$client_alive_count_max" 2>/dev/null; then
                     echo -e "${RED}请输入有效数字。${NC}"
@@ -432,8 +434,8 @@ configure_ssh() {
                 sub_step=6
                 ;;
             6)
-                input_box login_grace_time "请输入登录宽限时间 (LoginGraceTime, 秒):" "$login_grace_time"
-                res=$?
+                res=0
+                input_box login_grace_time "请输入登录宽限时间 (LoginGraceTime, 秒):" "$login_grace_time" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=5; continue; }
                 if ! validate_number "$login_grace_time" 2>/dev/null; then
                     echo -e "${RED}请输入有效数字。${NC}"
@@ -463,27 +465,27 @@ configure_security() {
     local install_fail2ban="${INSTALL_FAIL2BAN:-true}"
     local install_auditd="${INSTALL_AUDITD:-false}"
     local enable_selinux_check="${ENABLE_SELINUX_CHECK:-true}"
-    local res
+    local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 3 ]; do
         case "$sub_step" in
             1)
-                yesno_box "Fail2ban 防爆破" "是否安装配置 Fail2ban 防暴力破解工具？" "${install_fail2ban:0:1}"
-                res=$?
+                res=0
+                yesno_box "Fail2ban 防爆破" "是否安装配置 Fail2ban 防暴力破解工具？" "${install_fail2ban:0:1}" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && install_fail2ban="true" || install_fail2ban="false"
                 sub_step=2
                 ;;
             2)
-                yesno_box "auditd 审计" "是否安装并启用 auditd 系统审计框架？" "${install_auditd:0:1}"
-                res=$?
+                res=0
+                yesno_box "auditd 审计" "是否安装并启用 auditd 系统审计框架？" "${install_auditd:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 [ "$res" -eq 0 ] && install_auditd="true" || install_auditd="false"
                 sub_step=3
                 ;;
             3)
-                yesno_box "MAC 策略检查" "是否检查并配置 SELinux / AppArmor 安全策略？" "${enable_selinux_check:0:1}"
-                res=$?
+                res=0
+                yesno_box "MAC 策略检查" "是否检查并配置 SELinux / AppArmor 安全策略？" "${enable_selinux_check:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=2; continue; }
                 [ "$res" -eq 0 ] && enable_selinux_check="true" || enable_selinux_check="false"
                 sub_step=4
@@ -506,20 +508,20 @@ configure_services() {
     local sub_step=1
     local install_docker="${INSTALL_DOCKER:-true}"
     local install_npm="${INSTALL_NPM:-false}"
-    local res
+    local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 2 ]; do
         case "$sub_step" in
             1)
-                yesno_box "Docker 引擎" "是否自动安装与配置 Docker 容器引擎？" "${install_docker:0:1}"
-                res=$?
+                res=0
+                yesno_box "Docker 引擎" "是否自动安装与配置 Docker 容器引擎？" "${install_docker:0:1}" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && install_docker="true" || install_docker="false"
                 sub_step=2
                 ;;
             2)
-                yesno_box "Node.js & npm" "是否安装 Node.js 与 npm 包管理器？" "${install_npm:0:1}"
-                res=$?
+                res=0
+                yesno_box "Node.js & npm" "是否安装 Node.js 与 npm 包管理器？" "${install_npm:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 [ "$res" -eq 0 ] && install_npm="true" || install_npm="false"
                 sub_step=3
@@ -541,20 +543,20 @@ configure_backup_monitoring() {
     local sub_step=1
     local enable_backup="${ENABLE_BACKUP:-false}"
     local enable_monitoring="${ENABLE_MONITORING:-false}"
-    local res
+    local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 2 ]; do
         case "$sub_step" in
             1)
-                yesno_box "定时备份" "是否配置自动化备份任务？" "${enable_backup:0:1}"
-                res=$?
+                res=0
+                yesno_box "定时备份" "是否配置自动化备份任务？" "${enable_backup:0:1}" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && enable_backup="true" || enable_backup="false"
                 sub_step=2
                 ;;
             2)
-                yesno_box "监控组件" "是否部署 Prometheus Node Exporter 系统监控组件？" "${enable_monitoring:0:1}"
-                res=$?
+                res=0
+                yesno_box "监控组件" "是否部署 Prometheus Node Exporter 系统监控组件？" "${enable_monitoring:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 if [ "$res" -eq 0 ]; then
                     enable_monitoring="true"
@@ -586,48 +588,48 @@ configure_cleanup() {
     local clean_journal="${CLEAN_JOURNAL:-true}"
     local disable_services="${DISABLE_SERVICES:-false}"
     local clean_temp="${CLEAN_TEMP:-true}"
-    local res
+    local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 6 ]; do
         case "$sub_step" in
             1)
-                yesno_box "Swap 交换空间" "是否自动分配与配置 Swap 交换分区？(内存 ≤2G 推荐)" "${enable_swap:0:1}"
-                res=$?
+                res=0
+                yesno_box "Swap 交换空间" "是否自动分配与配置 Swap 交换分区？(内存 ≤2G 推荐)" "${enable_swap:0:1}" || res=$?
                 [ "$res" -eq 2 ] && return 2
                 [ "$res" -eq 0 ] && enable_swap="true" || enable_swap="false"
                 sub_step=2
                 ;;
             2)
-                yesno_box "Snap 卸载" "是否彻底卸载 Snap 软件包管理器？(仅 Ubuntu 有效)" "${remove_snap:0:1}"
-                res=$?
+                res=0
+                yesno_box "Snap 卸载" "是否彻底卸载 Snap 软件包管理器？(仅 Ubuntu 有效)" "${remove_snap:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=1; continue; }
                 [ "$res" -eq 0 ] && remove_snap="true" || remove_snap="false"
                 sub_step=3
                 ;;
             3)
-                yesno_box "包缓存清理" "是否清理 APT/YUM 包管理器缓存并移除旧内核？" "${clean_pkg_cache:0:1}"
-                res=$?
+                res=0
+                yesno_box "包缓存清理" "是否清理 APT/YUM 包管理器缓存并移除旧内核？" "${clean_pkg_cache:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=2; continue; }
                 [ "$res" -eq 0 ] && clean_pkg_cache="true" || clean_pkg_cache="false"
                 sub_step=4
                 ;;
             4)
-                yesno_box "systemd 日志限制" "是否清理旧日志并将日志上限限制为 200MB/7天？" "${clean_journal:0:1}"
-                res=$?
+                res=0
+                yesno_box "systemd 日志限制" "是否清理旧日志并将日志上限限制为 200MB/7天？" "${clean_journal:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=3; continue; }
                 [ "$res" -eq 0 ] && clean_journal="true" || clean_journal="false"
                 sub_step=5
                 ;;
             5)
-                yesno_box "无用服务禁用" "是否自动停用与禁用不必要的后台服务？" "${disable_services:0:1}"
-                res=$?
+                res=0
+                yesno_box "无用服务禁用" "是否自动停用与禁用不必要的后台服务？" "${disable_services:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=4; continue; }
                 [ "$res" -eq 0 ] && disable_services="true" || disable_services="false"
                 sub_step=6
                 ;;
             6)
-                yesno_box "临时文件清理" "是否清理 /tmp 临时文件及系统临时日志？" "${clean_temp:0:1}"
-                res=$?
+                res=0
+                yesno_box "临时文件清理" "是否清理 /tmp 临时文件及系统临时日志？" "${clean_temp:0:1}" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=5; continue; }
                 [ "$res" -eq 0 ] && clean_temp="true" || clean_temp="false"
                 sub_step=7
@@ -658,13 +660,13 @@ run_configuration_wizard() {
     while [ "$current_step" -ge 1 ] && [ "$current_step" -le "$total_steps" ]; do
         local res=0
         case "$current_step" in
-            1) configure_system; res=$? ;;
-            2) configure_user; res=$? ;;
-            3) configure_ssh; res=$? ;;
-            4) configure_security; res=$? ;;
-            5) configure_services; res=$? ;;
-            6) configure_backup_monitoring; res=$? ;;
-            7) configure_cleanup; res=$? ;;
+            1) configure_system || res=$? ;;
+            2) configure_user || res=$? ;;
+            3) configure_ssh || res=$? ;;
+            4) configure_security || res=$? ;;
+            5) configure_services || res=$? ;;
+            6) configure_backup_monitoring || res=$? ;;
+            7) configure_cleanup || res=$? ;;
         esac
 
         if [ "$res" -eq 2 ]; then
@@ -672,7 +674,8 @@ run_configuration_wizard() {
                 current_step=$((current_step - 1))
                 echo -e "\n${YELLOW}<< 已返回上一步 (Step ${current_step})${NC}"
             else
-                echo -e "\n${YELLOW}已处于第一步，无法继续回退。${NC}"
+                echo -e "\n${YELLOW}已处于第一步开头，返回主菜单。${NC}"
+                return 2
             fi
         elif [ "$res" -ne 0 ]; then
             msg_box "错误" "配置向导提前结束。"
@@ -707,17 +710,22 @@ configure_by_sections() {
         read -r -p "请选择 [0-7] (默认: 0): " choice
         choice="${choice:-0}"
 
+        local res=0
         case "$choice" in
-            1) configure_system ;;
-            2) configure_user ;;
-            3) configure_ssh ;;
-            4) configure_security ;;
-            5) configure_services ;;
-            6) configure_backup_monitoring ;;
-            7) configure_cleanup ;;
+            1) configure_system || res=$? ;;
+            2) configure_user || res=$? ;;
+            3) configure_ssh || res=$? ;;
+            4) configure_security || res=$? ;;
+            5) configure_services || res=$? ;;
+            6) configure_backup_monitoring || res=$? ;;
+            7) configure_cleanup || res=$? ;;
             0|b|back) break ;;
             *) echo -e "${RED}无效选项，请输入 0-7${NC}" ;;
         esac
+
+        if [ "$res" -eq 2 ]; then
+            echo -e "\n${YELLOW}<< 已取消当前模块修改，返回分项配置菜单。${NC}"
+        fi
 
         # 保存变更
         # shellcheck disable=SC2046
@@ -745,10 +753,14 @@ show_main_menu() {
 
         case "$choice" in
             1)
-                if run_configuration_wizard; then
+                local wizard_res=0
+                run_configuration_wizard || wizard_res=$?
+                if [ "$wizard_res" -eq 0 ]; then
                     # shellcheck disable=SC2046
                     save_config "$CONFIG_FILE" $(get_config_var_names)
                     log_info "向导配置已保存至 $CONFIG_FILE"
+                elif [ "$wizard_res" -eq 2 ]; then
+                    echo -e "\n${YELLOW}<< 已取消完整向导，返回主菜单。${NC}"
                 fi
                 ;;
             2)
@@ -784,8 +796,6 @@ show_main_menu() {
         esac
     done
 }
-
-# 安装前 Review；返回 0 表示继续，1 表示取消
 confirm_configuration_review() {
     local modules_count="$1"
     print_review_card "${modules_count}"
