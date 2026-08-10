@@ -96,7 +96,7 @@ sudo ./vps_setup.sh -n
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --ref main --install-dir /opt/vps-init-setup
+  | sudo bash -s -- --ref main --install-dir /opt/vps-init-setup --update-only
 ```
 
 更新后再强制重跑 SSH、Firewall 和 Fail2ban：

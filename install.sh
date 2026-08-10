@@ -9,6 +9,7 @@ Options:
   --repo-url URL      GitHub repository URL (default: ${REPO_URL})
   --ref REF           GitHub release tag or branch to install (default: ${REF})
   --install-dir DIR   Target directory (default: ${INSTALL_DIR})
+    --update-only       Update files without starting the setup wizard
   --help              Show this help
 
 Environment variables:
@@ -18,10 +19,16 @@ Environment variables:
 EOF
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd)"
+else
+    SCRIPT_DIR=""
+fi
 REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
 INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
 REF="${VPS_INIT_SETUP_REF:-$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "latest") }"
+RUN_SETUP=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -36,6 +43,10 @@ while [[ $# -gt 0 ]]; do
         --install-dir)
             INSTALL_DIR="$2"
             shift 2
+            ;;
+        --update-only)
+            RUN_SETUP=false
+            shift
             ;;
         --help|-h)
             usage
@@ -141,7 +152,7 @@ resolve_download_url() {
     fi
 }
 
-if [ -f "$SCRIPT_DIR/vps_setup.sh" ]; then
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/vps_setup.sh" ]; then
     echo "Using local repository at $SCRIPT_DIR"
     INSTALL_DIR="$SCRIPT_DIR"
 else
@@ -185,6 +196,11 @@ fi
 
 cd "$INSTALL_DIR"
 chmod +x vps_setup.sh
+
+if [ "$RUN_SETUP" = "false" ]; then
+    echo "Update complete. Setup wizard was not started."
+    exit 0
+fi
 
 echo "Starting VPS setup..."
 echo "Install directory: $INSTALL_DIR"
