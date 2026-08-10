@@ -162,9 +162,25 @@ else
         exit 1
     fi
 
+    preserved_dir="$(mktemp -d)"
+    for data_dir in config logs backups; do
+        if [ -d "$INSTALL_DIR/$data_dir" ]; then
+            mkdir -p "$preserved_dir/$data_dir"
+            cp -a "$INSTALL_DIR/$data_dir/." "$preserved_dir/$data_dir/"
+        fi
+    done
+
     rm -rf "$INSTALL_DIR"
     mkdir -p "$(dirname "$INSTALL_DIR")"
     cp -R "$extracted_dir" "$INSTALL_DIR"
+
+    for data_dir in config logs backups; do
+        if [ -d "$preserved_dir/$data_dir" ]; then
+            mkdir -p "$INSTALL_DIR/$data_dir"
+            cp -a "$preserved_dir/$data_dir/." "$INSTALL_DIR/$data_dir/"
+        fi
+    done
+    rm -rf "$preserved_dir"
 fi
 
 cd "$INSTALL_DIR"

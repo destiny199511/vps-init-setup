@@ -92,20 +92,21 @@ sudo ./vps_setup.sh -n
 
 ### 更新现有安装
 
-如需更新到最新版本，可以在安装目录中执行：
+通过压缩包安装的目录不包含 `.git`，不能使用 `git pull`。请重新运行安装器，并显式指定要更新的分支；安装器会保留现有的 `config/`、`logs/` 和 `backups/` 内容：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+  | sudo bash -s -- --ref main --install-dir /opt/vps-init-setup
+```
+
+更新后再强制重跑 SSH、Firewall 和 Fail2ban：
 
 ```bash
 cd /opt/vps-init-setup
-git pull
-sudo ./vps_setup.sh -n
+sudo ./vps_setup.sh -n -a -f --modules 05_ssh,06_firewall,07_fail2ban
 ```
 
-如果当前位于源码目录中，也可以直接执行：
-
-```bash
-git pull
-sudo ./vps_setup.sh -n
-```
+如果目录本身是通过 `git clone` 创建的，则可以继续使用 `git pull --ff-only origin main`。
 
 ### 注意事项
 
