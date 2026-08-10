@@ -186,6 +186,20 @@ detect_service_manager() {
     log_info "服务管理器: ${SVC_MGR}"
 }
 
+detect_firewall() {
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        printf '%s\n' "ufw"
+    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q '^running'; then
+        printf '%s\n' "firewalld"
+    elif command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -qE '(^|[[:space:]])(table|chain)[[:space:]]'; then
+        printf '%s\n' "nftables"
+    elif command -v iptables >/dev/null 2>&1 && iptables -S INPUT 2>/dev/null | grep -qvE '^-(P INPUT ACCEPT|A INPUT -j ACCEPT)$'; then
+        printf '%s\n' "iptables"
+    else
+        printf '%s\n' "none"
+    fi
+}
+
 # 兼容模块使用的旧检测接口
 detect_package_manager() {
     [ -n "${PKG_MGR:-}" ] || detect_pkg_manager >/dev/null

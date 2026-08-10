@@ -18,6 +18,22 @@ ssh_prerequisites() {
 
 ssh_main() {
     log_info "Starting SSH hardening..."
+
+    local ssh_service=""
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl list-unit-files ssh.service --no-legend 2>/dev/null | grep -q '^ssh\.service'; then
+            ssh_service="ssh"
+        elif systemctl list-unit-files sshd.service --no-legend 2>/dev/null | grep -q '^sshd\.service'; then
+            ssh_service="sshd"
+        fi
+    fi
+    if [ -z "$ssh_service" ] && command -v service >/dev/null 2>&1; then
+        if service ssh status >/dev/null 2>&1; then
+            ssh_service="ssh"
+        elif service sshd status >/dev/null 2>&1; then
+            ssh_service="sshd"
+        fi
+    fi
     
     # Backup SSH config
     local sshd_config_backup
@@ -25,7 +41,8 @@ ssh_main() {
     
     # Get current SSH port
     local current_port
-    current_port=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22")
+    current_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+    current_port="${current_port:-22}"
     log_info "Current SSH port: $current_port"
     
     # Determine target SSH port - use configured value
@@ -163,6 +180,20 @@ ssh_main() {
     
     # Apply changes
     log_info "Applying SSH hardening configuration..."
+
+    # Open the target port before changing sshd so a port migration cannot lock out
+    # the current session while the firewall module is still pending.
+    if [ "$target_port" != "$current_port" ]; then
+        log_info "Pre-opening firewall port for SSH migration: $target_port"
+        case "$(detect_firewall)" in
+            ufw) ufw allow "$target_port"/tcp >/dev/null 2>&1 || true ;;
+            firewalld)
+                firewall-cmd --permanent --add-port="$target_port"/tcp >/dev/null 2>&1 || true
+                firewall-cmd --reload >/dev/null 2>&1 || true
+                ;;
+            iptables) iptables -C INPUT -p tcp --dport "$target_port" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$target_port" -j ACCEPT 2>/dev/null || true ;;
+        esac
+    fi
     
     # Create new sshd_config
     {
@@ -232,25 +263,55 @@ ssh_main() {
         mv /etc/ssh/sshd_config.new /etc/ssh/sshd_config
         log_info "SSH configuration updated successfully"
         
-        # Restart SSH service
-        log_info "Restarting SSH service..."
-        if systemctl is-active --quiet sshd; then
-            systemctl restart sshd
-        elif service sshd status >/dev/null 2>&1; then
-            service sshd restart
+        # Reload the correct service unit first; reload preserves the active session
+        # while allowing sshd to bind the new port. Restart only as a fallback.
+        log_info "Reloading SSH service${ssh_service:+ ($ssh_service)}..."
+        if [ -n "$ssh_service" ] && command -v systemctl >/dev/null 2>&1; then
+            systemctl reload "$ssh_service" 2>/dev/null || systemctl restart "$ssh_service"
+        elif [ -n "$ssh_service" ] && command -v service >/dev/null 2>&1; then
+            service "$ssh_service" reload >/dev/null 2>&1 || service "$ssh_service" restart
         else
-            # Fallback
             pkill -HUP sshd 2>/dev/null || true
-            sleep 2
         fi
-        
-        # Verify SSH is still responsive
-        sleep 3
-        if ! sshd -t; then
-            log_error "SSH configuration test failed after restart - attempting rollback"
+
+        # Verify the effective configuration and that the target port is listening.
+        if ! sshd -t || ! sshd -T | grep -Eq "^port ${target_port}$"; then
+            log_error "SSH configuration validation failed after reload - attempting rollback"
             if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
                 cp -p "$sshd_config_backup" /etc/ssh/sshd_config
-                systemctl reload sshd 2>/dev/null || service sshd reload 2>/dev/null || true
+                if [ -n "$ssh_service" ]; then
+                    systemctl reload "$ssh_service" 2>/dev/null || service "$ssh_service" reload 2>/dev/null || true
+                fi
+                log_info "Rolled back SSH configuration"
+            fi
+            return 1
+        fi
+
+        if [ -n "$ssh_service" ] && command -v systemctl >/dev/null 2>&1 && ! systemctl is-active --quiet "$ssh_service"; then
+            log_error "SSH service $ssh_service is not active after reload - attempting rollback"
+            if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
+                cp -p "$sshd_config_backup" /etc/ssh/sshd_config
+                systemctl restart "$ssh_service" 2>/dev/null || true
+                log_info "Rolled back SSH configuration"
+            fi
+            return 1
+        fi
+
+        local ssh_ready=false
+        for _ in 1 2 3 4 5; do
+            if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${target_port}$"; then
+                ssh_ready=true
+                break
+            fi
+            sleep 1
+        done
+        if [ "$ssh_ready" != "true" ]; then
+            log_error "SSH is not listening on target port $target_port - attempting rollback"
+            if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
+                cp -p "$sshd_config_backup" /etc/ssh/sshd_config
+                if [ -n "$ssh_service" ]; then
+                    systemctl reload "$ssh_service" 2>/dev/null || service "$ssh_service" reload 2>/dev/null || true
+                fi
                 log_info "Rolled back SSH configuration"
             fi
             return 1
@@ -260,7 +321,7 @@ ssh_main() {
         if [ "$target_port" != "$current_port" ]; then
             log_info "Updating firewall rules for SSH port change: $current_port -> $target_port"
             
-            # Remove old rule (if exists)
+            # Remove old rule only after the new SSH listener is confirmed.
             case "$(detect_firewall)" in
                 ufw)
                     ufw delete allow "$current_port"/tcp 2>/dev/null || true

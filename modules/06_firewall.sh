@@ -44,14 +44,15 @@ firewall_main() {
     local ssh_port http_port https_port
     
     # Get SSH port from SSH config (which should already be set by SSH module)
-    ssh_port=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "${SSH_PORT:-22}")
+    ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+    ssh_port="${ssh_port:-${SSH_PORT:-22}}"
     
     # HTTP/HTTPS ports (can be overridden via config)
     http_port="${HTTP_PORT:-80}"
     https_port="${HTTPS_PORT:-443}"
     
     # Additional ports from config
-    local open_additional_ports="${ADDITIONAL_PORTS:-}"
+    local open_additional_ports="${ADDITIONAL_PORTS:-${ALLOWED_PORTS:-}}"
     
     # Validate ports
     if ! validate_port "$ssh_port"; then
