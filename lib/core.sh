@@ -693,6 +693,7 @@ print_review_card() {
     print_kv "语言:" "${LOCALE:-}"
     print_kv "DNS:" "${PRIMARY_DNS:-} / ${SECONDARY_DNS:-}"
     print_kv "SSH 端口:" "${SSH_PORT:-}"
+    print_kv "保留旧 SSH 端口:" "${SSH_KEEP_LEGACY_PORT:-true}"
     print_kv "Root 登录:" "${PERMIT_ROOT_LOGIN:-}"
     if [ "${PASSWORD_AUTH:-no}" = "yes" ]; then
         print_kv "密码认证:" "yes (密码已设置: $([ -n "${USER_PASSWORD:-}" ] && echo 是 || echo 否))"

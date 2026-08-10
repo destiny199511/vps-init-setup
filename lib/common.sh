@@ -9,6 +9,7 @@ LOCALE 'System locale (e.g., zh_CN.UTF-8)'
 PRIMARY_DNS 'Primary DNS server (e.g., 1.1.1.1)'
 SECONDARY_DNS 'Secondary DNS server (e.g., 8.8.8.8)'
 SSH_PORT 'SSH port number'
+SSH_KEEP_LEGACY_PORT 'Keep the previous SSH port open during migration (true/false)'
 PERMIT_ROOT_LOGIN 'Allow root login via SSH (yes/no)'
 PASSWORD_AUTH 'Allow password authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTHENTICATION 'Allow public key authentication via SSH (yes/no)'
@@ -211,6 +212,7 @@ apply_config_defaults() {
     : "${PRIMARY_DNS:=1.1.1.1}"
     : "${SECONDARY_DNS:=8.8.8.8}"
     : "${SSH_PORT:=24822}"
+    : "${SSH_KEEP_LEGACY_PORT:=true}"
     : "${PERMIT_ROOT_LOGIN:=no}"
     : "${PASSWORD_AUTH:=no}"
     : "${SSH_PUBKEY_AUTHENTICATION:=yes}"

@@ -175,7 +175,7 @@ vps-init-setup/
 
 | 模块 | 功能 |
 |------|------|
-| **05_ssh** | SSH端口修改、禁止root登录、禁用密码认证、MaxAuthTries、ClientAlive、LoginGraceTime，配置前 `sshd -t` 验证 |
+| **05_ssh** | SSH端口修改、迁移期默认保留旧端口、禁止root登录、禁用密码认证、MaxAuthTries、ClientAlive、LoginGraceTime，配置前 `sshd -t` 验证，并适配 `ssh.socket` |
 | **06_firewall** | UFW / FirewallD / iptables / nftables 四选一自动检测，默认 deny incoming，开放 SSH/HTTP/HTTPS，支持额外端口 |
 | **07_fail2ban** | 安装Fail2ban，SSH保护jail，三级封禁策略（含 recidive 1周封禁） |
 

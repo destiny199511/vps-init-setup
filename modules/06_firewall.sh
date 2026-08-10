@@ -49,11 +49,12 @@ firewall_main() {
     esac
     
     # Determine what ports to open - use standardized variable names
-    local ssh_port http_port https_port
+    local ssh_ports ssh_port http_port https_port
     
     # Get SSH port from SSH config (which should already be set by SSH module)
-    ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
-    ssh_port="${ssh_port:-${SSH_PORT:-22}}"
+    ssh_ports=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | awk '!seen[$0]++' | paste -sd ' ' -)
+    ssh_ports="${ssh_ports:-${SSH_PORT:-22}}"
+    ssh_port="${ssh_ports%% *}"
     
     # HTTP/HTTPS ports (can be overridden via config)
     http_port="${HTTP_PORT:-80}"
@@ -63,10 +64,12 @@ firewall_main() {
     local open_additional_ports="${ADDITIONAL_PORTS:-${ALLOWED_PORTS:-}}"
     
     # Validate ports
-    if ! validate_port "$ssh_port"; then
-        log_error "Invalid SSH port: $ssh_port"
-        return 1
-    fi
+    for configured_ssh_port in $ssh_ports; do
+        if ! validate_port "$configured_ssh_port"; then
+            log_error "Invalid SSH port: $configured_ssh_port"
+            return 1
+        fi
+    done
     
     if ! validate_port "$http_port"; then
         log_error "Invalid HTTP port: $http_port"
@@ -85,7 +88,13 @@ firewall_main() {
         ufw)
             if ufw status | grep -q "Status: active"; then
                 # Check if our essential ports are allowed
-                     if ufw status | awk -v port="$ssh_port/tcp" '$1 == port && $2 == "ALLOW" {found=1} END {exit !found}' && \
+                    ssh_ports_allowed=true
+                    for configured_ssh_port in $ssh_ports; do
+                        if ! ufw status | awk -v port="$configured_ssh_port/tcp" '$1 == port && $2 == "ALLOW" {found=1} END {exit !found}'; then
+                            ssh_ports_allowed=false
+                        fi
+                    done
+                    if [ "$ssh_ports_allowed" = "true" ] && \
                    ufw status | grep -q "$http_port/tcp.*ALLOW" && \
                    ufw status | grep -q "$https_port/tcp.*ALLOW"; then
                     already_configured=true
@@ -94,7 +103,13 @@ firewall_main() {
             ;;
         firewalld)
             if firewall-cmd --state 2>/dev/null | grep -q "running"; then
-                if firewall-cmd --list-ports | grep -q "$ssh_port/tcp" && \
+                ssh_ports_allowed=true
+                for configured_ssh_port in $ssh_ports; do
+                    if ! firewall-cmd --list-ports | grep -q "$configured_ssh_port/tcp"; then
+                        ssh_ports_allowed=false
+                    fi
+                done
+                if [ "$ssh_ports_allowed" = "true" ] && \
                    firewall-cmd --list-ports | grep -q "$http_port/tcp" && \
                    firewall-cmd --list-ports | grep -q "$https_port/tcp"; then
                     already_configured=true
@@ -102,14 +117,26 @@ firewall_main() {
             fi
             ;;
         iptables)
-            if iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$ssh_port" && \
+            ssh_ports_allowed=true
+            for configured_ssh_port in $ssh_ports; do
+                if ! iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$configured_ssh_port"; then
+                    ssh_ports_allowed=false
+                fi
+            done
+            if [ "$ssh_ports_allowed" = "true" ] && \
                iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$http_port" && \
                iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$https_port"; then
                 already_configured=true
             fi
             ;;
         nftables)
-            if nft list chain inet filter input 2>/dev/null | grep -q "dport $ssh_port" && \
+            ssh_ports_allowed=true
+            for configured_ssh_port in $ssh_ports; do
+                if ! nft list chain inet filter input 2>/dev/null | grep -q "dport $configured_ssh_port"; then
+                    ssh_ports_allowed=false
+                fi
+            done
+            if [ "$ssh_ports_allowed" = "true" ] && \
                nft list chain inet filter input 2>/dev/null | grep -q "dport $http_port" && \
                nft list chain inet filter input 2>/dev/null | grep -q "dport $https_port"; then
                 already_configured=true
@@ -172,8 +199,10 @@ firewall_main() {
             ufw default deny incoming
             ufw default allow outgoing
             
-            # Allow essential services
-            ufw allow "$ssh_port"/tcp comment 'SSH'
+            # Allow every active SSH listener during port migration.
+            for configured_ssh_port in $ssh_ports; do
+                ufw allow "$configured_ssh_port"/tcp comment 'SSH'
+            done
             ufw allow "$http_port"/tcp comment 'HTTP'
             ufw allow "$https_port"/tcp comment 'HTTPS'
             
@@ -229,8 +258,10 @@ firewall_main() {
             firewall-cmd --permanent --zone=drop --add-source=127.0.0.1/8
             firewall-cmd --permanent --zone=drop --add-source=::1/128
             
-            # Add our services
-            firewall-cmd --permanent --zone=drop --add-port="$ssh_port"/tcp
+            # Add every active SSH listener during port migration.
+            for configured_ssh_port in $ssh_ports; do
+                firewall-cmd --permanent --zone=drop --add-port="$configured_ssh_port"/tcp
+            done
             firewall-cmd --permanent --zone=drop --add-port="$http_port"/tcp
             firewall-cmd --permanent --zone=drop --add-port="$https_port"/tcp
             
@@ -289,7 +320,9 @@ firewall_main() {
             iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
             
             # Allow incoming SSH, HTTP, HTTPS
-            iptables -A INPUT -p tcp --dport "$ssh_port" -m state --state NEW -j ACCEPT
+            for configured_ssh_port in $ssh_ports; do
+                iptables -A INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT
+            done
             iptables -A INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT
             iptables -A INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT
             
@@ -367,7 +400,9 @@ firewall_main() {
                 echo "        ct state established,related accept"
                 echo ""
                 echo "        # Allow SSH, HTTP, HTTPS"
-                echo "        tcp dport $ssh_port ct state new accept"
+                for configured_ssh_port in $ssh_ports; do
+                    echo "        tcp dport $configured_ssh_port ct state new accept"
+                done
                 echo "        tcp dport $http_port ct state new accept"
                 echo "        tcp dport $https_port ct state new accept"
                 echo ""

@@ -16,6 +16,40 @@ ssh_prerequisites() {
     return 0
 }
 
+configure_ssh_socket_ports() {
+    local socket_unit socket_dir socket_dropin configured_port
+
+    command -v systemctl >/dev/null 2>&1 || return 0
+
+    for socket_unit in ssh.socket sshd.socket; do
+        if ! systemctl is-active --quiet "$socket_unit" 2>/dev/null && \
+           ! systemctl is-enabled --quiet "$socket_unit" 2>/dev/null; then
+            continue
+        fi
+
+        socket_dir="/etc/systemd/system/${socket_unit}.d"
+        socket_dropin="${socket_dir}/10-vps-init-setup.conf"
+        if [ -f "$socket_dropin" ]; then
+            backup_file "$socket_dropin" >/dev/null 2>&1 || true
+        fi
+        mkdir -p "$socket_dir"
+        {
+            echo "[Socket]"
+            echo "ListenStream="
+            for configured_port in $ssh_ports; do
+                echo "ListenStream=$configured_port"
+            done
+        } > "$socket_dropin"
+
+        systemctl daemon-reload
+        if ! systemctl restart "$socket_unit"; then
+            log_error "Failed to restart $socket_unit after updating ListenStream"
+            return 1
+        fi
+        log_info "Updated $socket_unit ListenStream ports: $ssh_ports"
+    done
+}
+
 ssh_main() {
     log_info "Starting SSH hardening..."
 
@@ -39,14 +73,23 @@ ssh_main() {
     local sshd_config_backup
     sshd_config_backup=$(backup_file "/etc/ssh/sshd_config") || true
     
-    # Get current SSH port
-    local current_port
-    current_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
-    current_port="${current_port:-22}"
-    log_info "Current SSH port: $current_port"
+    # Get current SSH ports from sshd and socket activation.
+    local current_ports current_port
+    current_ports=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | paste -sd ' ' -)
+    current_ports="${current_ports:-22}"
+    current_port="${current_ports%% *}"
+    log_info "Current SSH ports: $current_ports"
     
     # Determine target SSH port - use configured value
     local target_port="${SSH_PORT:-22}"
+    local keep_legacy_port="${SSH_KEEP_LEGACY_PORT:-true}"
+    local ssh_ports="$target_port"
+    if [ "$keep_legacy_port" = "true" ] && [ "$current_ports" != "$target_port" ]; then
+        case " $current_ports " in
+            *" $target_port "*) ssh_ports="$current_ports" ;;
+            *) ssh_ports="$current_ports $target_port" ;;
+        esac
+    fi
     
     # Validate port
     if ! validate_port "$target_port"; then
@@ -181,18 +224,20 @@ ssh_main() {
     # Apply changes
     log_info "Applying SSH hardening configuration..."
 
-    # Open the target port before changing sshd so a port migration cannot lock out
-    # the current session while the firewall module is still pending.
+    # Open every migration port before changing sshd so a port migration cannot
+    # lock out the current session while the firewall module is still pending.
     if [ "$target_port" != "$current_port" ]; then
-        log_info "Pre-opening firewall port for SSH migration: $target_port"
-        case "$(detect_firewall)" in
-            ufw) ufw allow "$target_port"/tcp >/dev/null 2>&1 || true ;;
-            firewalld)
-                firewall-cmd --permanent --add-port="$target_port"/tcp >/dev/null 2>&1 || true
-                firewall-cmd --reload >/dev/null 2>&1 || true
-                ;;
-            iptables) iptables -C INPUT -p tcp --dport "$target_port" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$target_port" -j ACCEPT 2>/dev/null || true ;;
-        esac
+        log_info "Pre-opening firewall ports for SSH migration: $ssh_ports"
+        for migration_port in $ssh_ports; do
+            case "$(detect_firewall)" in
+                ufw) ufw allow "$migration_port"/tcp >/dev/null 2>&1 || true ;;
+                firewalld)
+                    firewall-cmd --permanent --add-port="$migration_port"/tcp >/dev/null 2>&1 || true
+                    firewall-cmd --reload >/dev/null 2>&1 || true
+                    ;;
+                iptables) iptables -C INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || true ;;
+            esac
+        done
     fi
     
     # Create new sshd_config
@@ -201,8 +246,10 @@ ssh_main() {
         echo "# Generated: $(date)"
         echo ""
         
-        # Port
-        echo "Port $target_port"
+        # Keep the old listener during migration unless explicitly disabled.
+        for configured_port in $ssh_ports; do
+            echo "Port $configured_port"
+        done
         echo ""
         
         # Authentication
@@ -262,6 +309,17 @@ ssh_main() {
     if sshd -t -f /etc/ssh/sshd_config.new; then
         mv /etc/ssh/sshd_config.new /etc/ssh/sshd_config
         log_info "SSH configuration updated successfully"
+
+        if ! configure_ssh_socket_ports; then
+            log_error "SSH socket activation could not be updated - attempting rollback"
+            rm -f /etc/systemd/system/ssh.socket.d/10-vps-init-setup.conf \
+                  /etc/systemd/system/sshd.socket.d/10-vps-init-setup.conf
+            systemctl daemon-reload 2>/dev/null || true
+            if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
+                cp -p "$sshd_config_backup" /etc/ssh/sshd_config
+            fi
+            return 1
+        fi
         
         # Reload the correct service unit first; reload preserves the active session
         # while allowing sshd to bind the new port. Restart only as a fallback.
@@ -279,7 +337,9 @@ ssh_main() {
         local sshd_test_output effective_ports
         sshd_test_output=$(sshd -t 2>&1) || effective_ssh_config_ok=false
         effective_ports=$(sshd -T 2>&1 | awk '$1 == "port" {print $2}' | paste -sd ',' -)
-        echo "$effective_ports" | tr ',' '\n' | grep -qx "$target_port" || effective_ssh_config_ok=false
+        for expected_port in $ssh_ports; do
+            echo "$effective_ports" | tr ',' '\n' | grep -qx "$expected_port" || effective_ssh_config_ok=false
+        done
         if [ "$effective_ssh_config_ok" != "true" ]; then
             log_error "SSH configuration validation failed after reload - attempting rollback"
             [ -n "$sshd_test_output" ] && log_error "sshd validation: $sshd_test_output"
@@ -294,7 +354,10 @@ ssh_main() {
             return 1
         fi
 
-        if [ -n "$ssh_service" ] && command -v systemctl >/dev/null 2>&1 && ! systemctl is-active --quiet "$ssh_service"; then
+          if [ -n "$ssh_service" ] && command -v systemctl >/dev/null 2>&1 && \
+              ! systemctl is-active --quiet "$ssh_service" && \
+              ! systemctl is-active --quiet ssh.socket 2>/dev/null && \
+              ! systemctl is-active --quiet sshd.socket 2>/dev/null; then
             log_error "SSH service $ssh_service is not active after reload - attempting rollback"
             if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
                 cp -p "$sshd_config_backup" /etc/ssh/sshd_config
@@ -305,15 +368,23 @@ ssh_main() {
         fi
 
         local ssh_ready=false
+        local all_ssh_ports_ready=true
         for _ in 1 2 3 4 5; do
-            if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${target_port}$"; then
+            all_ssh_ports_ready=true
+            for expected_port in $ssh_ports; do
+                if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${expected_port}$"; then
+                    all_ssh_ports_ready=false
+                    break
+                fi
+            done
+            if [ "$all_ssh_ports_ready" = "true" ]; then
                 ssh_ready=true
                 break
             fi
             sleep 1
         done
         if [ "$ssh_ready" != "true" ]; then
-            log_error "SSH is not listening on target port $target_port - attempting rollback"
+            log_error "SSH is not listening on all expected ports ($ssh_ports) - attempting rollback"
             if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
                 cp -p "$sshd_config_backup" /etc/ssh/sshd_config
                 if [ -n "$ssh_service" ]; then
@@ -327,27 +398,28 @@ ssh_main() {
         # Update firewall if port changed
         if [ "$target_port" != "$current_port" ]; then
             log_info "Updating firewall rules for SSH port change: $current_port -> $target_port"
-            
-            # Remove old rule only after the new SSH listener is confirmed.
-            case "$(detect_firewall)" in
-                ufw)
-                    ufw delete allow "$current_port"/tcp 2>/dev/null || true
-                    ufw allow "$target_port"/tcp
-                    ;;
-                firewalld)
-                    firewall-cmd --remove-port="$current_port"/tcp --permanent 2>/dev/null || true
-                    firewall-cmd --add-port="$target_port"/tcp --permanent
-                    firewall-cmd --reload
-                    ;;
-                iptables)
-                    iptables -D INPUT -p tcp --dport "$current_port" -j ACCEPT 2>/dev/null || true
-                    iptables -I INPUT -p tcp --dport "$target_port" -j ACCEPT
-                    ;;
-                nftables)
-                    # nftables is more complex, skip for now
-                    logger "Manual nftables rule update needed for port $target_port"
-                    ;;
-            esac
+
+            # Add all confirmed listeners. The old port is removed only when the
+            # operator explicitly disables SSH_KEEP_LEGACY_PORT.
+            for migration_port in $ssh_ports; do
+                case "$(detect_firewall)" in
+                    ufw) ufw allow "$migration_port"/tcp >/dev/null 2>&1 || true ;;
+                    firewalld)
+                        firewall-cmd --permanent --add-port="$migration_port"/tcp >/dev/null 2>&1 || true
+                        firewall-cmd --reload >/dev/null 2>&1 || true
+                        ;;
+                    iptables) iptables -C INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || true ;;
+                esac
+            done
+            if [ "$keep_legacy_port" != "true" ]; then
+                case "$(detect_firewall)" in
+                    ufw) ufw delete allow "$current_port"/tcp 2>/dev/null || true ;;
+                    firewalld) firewall-cmd --remove-port="$current_port"/tcp --permanent 2>/dev/null || true; firewall-cmd --reload >/dev/null 2>&1 || true ;;
+                    iptables) iptables -D INPUT -p tcp --dport "$current_port" -j ACCEPT 2>/dev/null || true ;;
+                esac
+            else
+                log_warn "Keeping legacy SSH port $current_port open for connection recovery"
+            fi
             
             audit "SSH_PORT_CHANGED" "from=$current_port to=$target_port"
         fi

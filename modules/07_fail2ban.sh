@@ -32,9 +32,53 @@ fail2ban_main() {
     fail2ban_backup=$(backup_file "/etc/fail2ban/jail.local") || true
     fail2ban_backup=$(backup_file "/etc/fail2ban/jail.d") || true
     
-    # Get SSH port for configuration
-    local ssh_port
-    ssh_port=$(grep '^Port' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22")
+    # Get every effective SSH port, including a legacy port kept during migration.
+    local ssh_ports ssh_port
+    ssh_ports=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | awk '!seen[$0]++' | paste -sd ',' -)
+    ssh_ports="${ssh_ports:-${SSH_PORT:-22}}"
+    ssh_port="${ssh_ports%%,*}"
+
+    local firewall_type ban_action
+    firewall_type="$(detect_firewall)"
+    case "$firewall_type" in
+        ufw) ban_action="ufw" ;;
+        firewalld) ban_action="firewallcmd-ipset" ;;
+        nftables) ban_action="nftables-multiport" ;;
+        *) ban_action="iptables-multiport" ;;
+    esac
+
+    local ignore_ips="${FAIL2BAN_IGNOREIP:-127.0.0.1/8 ::1}"
+    local detected_client_ip=""
+    if [ -n "${SSH_CLIENT:-}" ]; then
+        detected_client_ip="${SSH_CLIENT%% *}"
+    fi
+    if [ -n "$detected_client_ip" ]; then
+        case " $ignore_ips " in
+            *" $detected_client_ip "*) ;;
+            *) ignore_ips="$ignore_ips $detected_client_ip" ;;
+        esac
+    fi
+    for detected_client_ip in $(ss -tnH 2>/dev/null | awk -v ports="$ssh_ports" '
+        BEGIN { count = split(ports, wanted, ",") }
+        $1 == "ESTAB" {
+            local_port = $4
+            sub(/^.*:/, "", local_port)
+            for (i = 1; i <= count; i++) {
+                if (local_port == wanted[i]) {
+                    peer = $5
+                    sub(/^\[/, "", peer)
+                    sub(/\]:[0-9]+$/, "", peer)
+                    sub(/:[0-9]+$/, "", peer)
+                    print peer
+                }
+            }
+        }' | sort -u); do
+        case " $ignore_ips " in
+            *" $detected_client_ip "*) ;;
+            *) ignore_ips="$ignore_ips $detected_client_ip" ;;
+        esac
+    done
+    log_info "Fail2ban SSH ports: $ssh_ports; ignore IPs: $ignore_ips"
     
     # Determine ban settings
     local ban_time findtime maxretry
@@ -141,41 +185,34 @@ fail2ban_main() {
         echo "[DEFAULT]"
         echo "# Ban hosts for one hour:"
         echo "bantime = $ban_time"
+        echo "ignoreip = $ignore_ips"
+        echo "backend = systemd"
         echo ""
-        echo "# Override /etc/fail2ban/jail.d/00-firewalld.conf:"
-        echo "banaction = iptables-multiport"
+        echo "# Use the action matching the active firewall backend: $firewall_type"
+        echo "banaction = $ban_action"
         echo ""
         echo "# Email notifications:"
         if [ -n "$email_action" ]; then
-            echo "action = $(echo "$email_action" | sed 's/_$//')"
+            echo "action = $email_action"
             echo "mta = sendmail"
-            echo "dest = $dest_email"
+            echo "destemail = $dest_email"
             echo "sender = $sender_email"
             echo "sendername = $sendername"
         else
-            echo "action = iptables-multiport"
+            echo "action = $ban_action"
         fi
         echo ""
         echo ""
         echo "[sshd]"
         echo "enabled = true"
         echo "filter = sshd"
-        echo "action = $(echo "$email_action" | sed 's/_$//')iptables-multiport"
+        echo "port = $ssh_ports"
+        echo "action = $ban_action"
         echo "logpath = %(sshd_log)s"
         echo "maxretry = $maxretry"
         echo "findtime = $findtime"
         echo "bantime = $ban_time"
         echo ""
-        echo "# Additional common jails"
-        echo ""
-        echo "[sshd-ddos]"
-        echo "enabled = true"
-        echo "filter = sshddos"
-        echo "action = iptables-multiport name=sshd-ddos port=$ssh_port"
-        echo "logpath = %(sshd_log)s"
-        echo "maxretry = 5"
-        echo "findtime = $findtime"
-        echo "bantime = $ban_time"
         echo ""
         echo "[recidive]"
         echo "enabled = true"
@@ -208,6 +245,16 @@ fail2ban_main() {
         echo "enabled = false"
     } > /etc/fail2ban/jail.d/00-disable-unsafe.conf
     
+    # Validate before touching the running service; a bad jail must not take
+    # down an otherwise usable security service.
+    if ! fail2ban-client -t >/dev/null 2>&1; then
+        log_error "Fail2ban configuration validation failed; keeping the previous service state"
+        fail2ban-client -t 2>&1 | while read -r line; do
+            log_error "Fail2ban config: $line"
+        done
+        return 1
+    fi
+
     # Restart fail2ban service
     log_info "Starting Fail2ban service..."
     if systemctl daemon-reload 2>/dev/null; then
