@@ -275,8 +275,15 @@ ssh_main() {
         fi
 
         # Verify the effective configuration and that the target port is listening.
-        if ! sshd -t || ! sshd -T | grep -Eq "^port ${target_port}$"; then
+        local effective_ssh_config_ok=true
+        local sshd_test_output effective_ports
+        sshd_test_output=$(sshd -t 2>&1) || effective_ssh_config_ok=false
+        effective_ports=$(sshd -T 2>&1 | awk '$1 == "port" {print $2}' | paste -sd ',' -)
+        echo "$effective_ports" | tr ',' '\n' | grep -qx "$target_port" || effective_ssh_config_ok=false
+        if [ "$effective_ssh_config_ok" != "true" ]; then
             log_error "SSH configuration validation failed after reload - attempting rollback"
+            [ -n "$sshd_test_output" ] && log_error "sshd validation: $sshd_test_output"
+            log_error "Effective SSH ports: ${effective_ports:-none}; expected: $target_port"
             if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
                 cp -p "$sshd_config_backup" /etc/ssh/sshd_config
                 if [ -n "$ssh_service" ]; then

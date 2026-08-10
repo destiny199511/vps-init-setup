@@ -17,7 +17,13 @@ locale_timezone_main() {
     # Get current settings
     local current_locale current_timezone
     current_locale=$(locale | grep LANG= | cut -d= -f2 | tr -d '"')
-    current_timezone=$(cat /etc/timezone 2>/dev/null || timedatectl show-timezone 2>/dev/null || echo "UTC")
+    current_timezone=""
+    if command -v timedatectl >/dev/null 2>&1; then
+        current_timezone=$(timedatectl show-timezone 2>/dev/null || true)
+    fi
+    [ -z "$current_timezone" ] && current_timezone=$(readlink -f /etc/localtime 2>/dev/null | sed 's#^.*/zoneinfo/##')
+    [ -z "$current_timezone" ] && current_timezone=$(cat /etc/timezone 2>/dev/null || true)
+    current_timezone="${current_timezone:-UTC}"
     
     log_info "Current locale: $current_locale"
     log_info "Current timezone: $current_timezone"
@@ -113,7 +119,7 @@ locale_timezone_main() {
         case "$(detect_package_manager)" in
             apt)
                 # Check if locale already generated
-                if ! locale -a 2>/dev/null | grep -q "^$target_locale$"; then
+                if ! locale -a 2>/dev/null | grep -qiE "^${target_locale//-/.}$|^${target_locale//UTF-8/utf8}$"; then
                     if ! locale-gen "$target_locale"; then
                         log_error "Failed to generate locale: $target_locale"
                         return 1
@@ -176,7 +182,11 @@ locale_timezone_main() {
         # Set timezone
         case "$(detect_init_system)" in
             systemd)
-                timedatectl set-timezone "$target_timezone"
+                if ! timedatectl set-timezone "$target_timezone"; then
+                    log_warn "timedatectl unavailable, falling back to /etc/localtime"
+                    ln -sfn "/usr/share/zoneinfo/$target_timezone" /etc/localtime
+                    printf '%s\n' "$target_timezone" > /etc/timezone
+                fi
                 ;;
             *)
                 # Traditional method
@@ -187,7 +197,12 @@ locale_timezone_main() {
         
         # Verify the change
         local new_timezone
-        new_timezone=$(cat /etc/timezone 2>/dev/null || timedatectl show-timezone 2>/dev/null || echo "Unknown")
+        new_timezone=""
+        if command -v timedatectl >/dev/null 2>&1; then
+            new_timezone=$(timedatectl show-timezone 2>/dev/null || true)
+        fi
+        [ -z "$new_timezone" ] && new_timezone=$(readlink -f /etc/localtime 2>/dev/null | sed 's#^.*/zoneinfo/##')
+        [ -z "$new_timezone" ] && new_timezone=$(cat /etc/timezone 2>/dev/null || true)
         if [ "$new_timezone" = "$target_timezone" ]; then
             log_info "Timezone successfully set to: $new_timezone"
             changes_made=true

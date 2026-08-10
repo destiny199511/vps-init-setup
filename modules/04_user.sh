@@ -134,7 +134,7 @@ user_main() {
         fi
         
         # Handle authorized keys
-        local ssh_key_source="${SSH_PUBLIC_KEY:-}"
+        local ssh_key_source="${SSH_PUBLIC_KEY:-${SSH_PUBKEY:-}}"
         
         case "$ssh_key_source" in
             "")
@@ -279,7 +279,7 @@ user_main() {
     fi
     
     # Final verification
-    if id "$username" &>/devstalled; then
+    if id "$username" &>/dev/null; then
         log_info "User '$username' configured successfully"
         log_info "UID: $(id -u "$username"), GID: $(id -g "$username")"
         log_info "Home: $(eval echo "~$username")"

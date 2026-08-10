@@ -538,6 +538,12 @@ validate_hostname() {
     [[ "${name}" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$ ]]
 }
 
+validate_username() {
+    local username="$1"
+    [[ "$username" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}$ ]] && \
+        [[ ! "$username" =~ ^[0-9]+$ ]]
+}
+
 # validate_port: 验证端口号
 validate_port() {
     local port="$1"
@@ -728,6 +734,16 @@ write_install_result() {
         printf 'VPS_SETUP_INSTALL_FAIL2BAN=%q\n' "${INSTALL_FAIL2BAN:-}"
         printf 'VPS_SETUP_ENABLE_BACKUP=%q\n' "${ENABLE_BACKUP:-}"
         printf 'VPS_SETUP_ENABLE_MONITORING=%q\n' "${ENABLE_MONITORING:-}"
+        collect_actual_vps_status
+        printf 'VPS_SETUP_ACTUAL_HOSTNAME=%q\n' "${ACTUAL_HOSTNAME:-}"
+        printf 'VPS_SETUP_ACTUAL_TIMEZONE=%q\n' "${ACTUAL_TIMEZONE:-}"
+        printf 'VPS_SETUP_ACTUAL_LOCALE=%q\n' "${ACTUAL_LOCALE:-}"
+        printf 'VPS_SETUP_ACTUAL_SSH_SERVICE=%q\n' "${ACTUAL_SSH_SERVICE:-}"
+        printf 'VPS_SETUP_ACTUAL_SSH_PORTS=%q\n' "${ACTUAL_SSH_PORTS:-}"
+        printf 'VPS_SETUP_ACTUAL_FIREWALL=%q\n' "${ACTUAL_FIREWALL:-}"
+        printf 'VPS_SETUP_ACTUAL_SWAP=%q\n' "${ACTUAL_SWAP:-}"
+        printf 'VPS_SETUP_ACTUAL_DOCKER=%q\n' "${ACTUAL_DOCKER:-}"
+        printf 'VPS_SETUP_ACTUAL_FAIL2BAN=%q\n' "${ACTUAL_FAIL2BAN:-}"
     } > "${result_file}"
     umask "${prev_umask}"
     chmod 600 "${result_file}" 2>/dev/null || true
@@ -745,6 +761,8 @@ print_completion_card() {
 
     if [[ "${dry_run}" == "true" ]]; then
         print_section "试运行完成 / Dry-Run Complete"
+    elif [[ "${FAILED_COUNT:-0}" -gt 0 ]]; then
+        print_section "安装部分完成 / Setup Partially Completed"
     else
         print_section "安装完成 / Setup Complete"
     fi
@@ -770,13 +788,17 @@ print_completion_card() {
     print_kv "完整日志:" "${LOG_FILE}"
     echo -e "${GREEN}═══════════════════════════════════════════${NC}"
 
+    print_actual_vps_status "$dry_run"
+
     if [[ -n "${module_summary}" ]]; then
         echo -e "${BOLD}模块结果:${NC}"
         echo -e "${module_summary}"
         echo -e "${GREEN}═══════════════════════════════════════════${NC}"
     fi
 
-    if [[ "${dry_run}" != "true" ]]; then
+    if [[ "${dry_run}" != "true" && "${FAILED_COUNT:-0}" -gt 0 ]]; then
+        echo -e "${RED}✗ 有 ${FAILED_COUNT} 个模块失败，请根据上方实际状态和日志修复后重试。${NC}"
+    elif [[ "${dry_run}" != "true" ]]; then
         echo -e "${YELLOW}⚠ 请立即保存 SSH 端口与登录信息；更改端口后请先新开终端验证再断开当前会话。${NC}"
     fi
 
@@ -789,6 +811,65 @@ print_completion_card() {
 │  tail -f ${LOG_FILE}
 └───────────────────────────────────────────────────────┘
 EOF
+}
+
+collect_actual_vps_status() {
+    ACTUAL_HOSTNAME="$(hostname 2>/dev/null || printf '%s' unknown)"
+    ACTUAL_OS="${OS_PRETTY:-unknown}"
+    ACTUAL_ARCH="$(uname -m 2>/dev/null || printf '%s' unknown)"
+    ACTUAL_TIMEZONE="$(timedatectl show-timezone 2>/dev/null || true)"
+    [ -z "$ACTUAL_TIMEZONE" ] && ACTUAL_TIMEZONE="$(readlink -f /etc/localtime 2>/dev/null | sed 's#^.*/zoneinfo/##')"
+    [ -z "$ACTUAL_TIMEZONE" ] && ACTUAL_TIMEZONE="$(cat /etc/timezone 2>/dev/null || true)"
+    ACTUAL_TIMEZONE="${ACTUAL_TIMEZONE#/}"
+    ACTUAL_TIMEZONE="${ACTUAL_TIMEZONE:-unknown}"
+    ACTUAL_LOCALE="$(locale 2>/dev/null | awk -F= '$1 == "LANG" {gsub(/"/, "", $2); print $2; exit}')"
+    ACTUAL_LOCALE="${ACTUAL_LOCALE:-${LANG:-unknown}}"
+    ACTUAL_SSH_PORTS="$(ss -ltnH 2>/dev/null | awk '{print $4}' | paste -sd ',' -)"
+    ACTUAL_SSH_PORTS="${ACTUAL_SSH_PORTS:-unknown}"
+    ACTUAL_SSH_SERVICE="inactive"
+    if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
+        ACTUAL_SSH_SERVICE="active"
+    elif service ssh status >/dev/null 2>&1 || service sshd status >/dev/null 2>&1; then
+        ACTUAL_SSH_SERVICE="active"
+    fi
+    ACTUAL_FIREWALL="$(detect_firewall 2>/dev/null || printf '%s' unknown)"
+    ACTUAL_SWAP="$(swapon --show --noheadings 2>/dev/null | awk 'NR == 1 {print $1 "," $3; exit}')"
+    ACTUAL_SWAP="${ACTUAL_SWAP:-none}"
+    ACTUAL_DOCKER="not-installed"
+    if command -v docker >/dev/null 2>&1; then
+        if docker info >/dev/null 2>&1; then ACTUAL_DOCKER="active"; else ACTUAL_DOCKER="installed/inactive"; fi
+    fi
+    ACTUAL_FAIL2BAN="not-installed"
+    if command -v fail2ban-client >/dev/null 2>&1; then
+        if fail2ban-client ping >/dev/null 2>&1; then ACTUAL_FAIL2BAN="active"; else ACTUAL_FAIL2BAN="installed/inactive"; fi
+    fi
+    ACTUAL_USER="${USERNAME:-unknown}"
+    if id "${USERNAME:-}" >/dev/null 2>&1; then
+        ACTUAL_USER="${USERNAME} (uid=$(id -u "$USERNAME"), groups=$(id -nG "$USERNAME" 2>/dev/null | tr ' ' ','))"
+    else
+        ACTUAL_USER="${USERNAME:-unknown} (missing)"
+    fi
+}
+
+print_actual_vps_status() {
+    local dry_run="${1:-false}"
+    collect_actual_vps_status
+    print_section "VPS 实际生效状态 / Actual State"
+    if [ "$dry_run" = true ]; then
+        echo -e "${YELLOW}⚠ 以下为当前运行环境状态；试运行未修改 VPS 配置。${NC}"
+    fi
+    print_kv "主机名:" "$ACTUAL_HOSTNAME"
+    print_kv "系统:" "$ACTUAL_OS"
+    print_kv "架构:" "$ACTUAL_ARCH"
+    print_kv "时区:" "$ACTUAL_TIMEZONE"
+    print_kv "Locale:" "$ACTUAL_LOCALE"
+    print_kv "管理用户:" "$ACTUAL_USER"
+    print_kv "SSH 服务:" "$ACTUAL_SSH_SERVICE"
+    print_kv "监听地址:" "$ACTUAL_SSH_PORTS"
+    print_kv "防火墙:" "$ACTUAL_FIREWALL"
+    print_kv "Swap:" "$ACTUAL_SWAP"
+    print_kv "Docker:" "$ACTUAL_DOCKER"
+    print_kv "Fail2ban:" "$ACTUAL_FAIL2BAN"
 }
 
 # print_status_table: 美化模块状态表

@@ -205,12 +205,7 @@ validate_hostname() {
 apply_config_defaults() {
     # Set defaults for variables that don't have values yet
     : "${USERNAME:=appadmin}"
-    # bash/环境会预置 HOSTNAME；仅在配置文件或 VPS_SETUP_HOSTNAME 未指定时使用产品默认值
-    if [[ "${HOSTNAME_FROM_CONFIG:-false}" != "true" && -z "${VPS_SETUP_HOSTNAME:-}" ]]; then
-        HOSTNAME="my-vps-server"
-    else
-        : "${HOSTNAME:=my-vps-server}"
-    fi
+    : "${HOSTNAME:=my-vps-server}"
     : "${TIMEZONE:=Asia/Shanghai}"
     : "${LOCALE:=zh_CN.UTF-8}"
     : "${PRIMARY_DNS:=1.1.1.1}"

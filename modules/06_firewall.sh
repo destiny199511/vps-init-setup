@@ -18,6 +18,14 @@ firewall_main() {
     local firewall_type
     firewall_type=$(detect_firewall)
     log_info "Detected firewall system: $firewall_type"
+
+    if [ "$firewall_type" = "none" ]; then
+        if command -v apt-get >/dev/null 2>&1; then
+            log_info "No active firewall detected; installing UFW..."
+            install_package ufw
+            firewall_type="ufw"
+        fi
+    fi
     
     # Backup current firewall state if possible
     case "$firewall_type" in
@@ -409,9 +417,9 @@ firewall_main() {
             ;;
             
         *)
-            log_error "Unsupported or no firewall system detected: $firewall_type"
-            log_error "Please configure firewall manually or install ufw, firewalld, iptables, or nftables"
-            return 1
+            log_warn "No supported active firewall detected; leaving firewall unchanged"
+            state_mark "firewall" "skipped"
+            return 0
             ;;
     esac
     

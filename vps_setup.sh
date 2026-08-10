@@ -15,6 +15,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/core.sh"
 source "${SCRIPT_DIR}/lib/common.sh"
 
+# HOSTNAME is commonly pre-populated by the shell; configuration must come from
+# VPS_SETUP_HOSTNAME, the config file, or the interactive wizard instead.
+if [ -z "${VPS_SETUP_HOSTNAME:-}" ]; then
+    unset HOSTNAME
+fi
+
 # 确保目录存在
 mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}"
 
