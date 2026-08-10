@@ -50,6 +50,42 @@ configure_ssh_socket_ports() {
     done
 }
 
+verify_ssh_runtime() {
+    local expected_ports="$1"
+    local expected_port
+    local effective_ports
+
+    if ! command -v sshd >/dev/null 2>&1; then
+        log_error "sshd is not available; cannot verify the SSH runtime"
+        return 1
+    fi
+    if ! sshd -t >/dev/null 2>&1; then
+        log_error "The active SSH configuration failed sshd -t"
+        sshd -t 2>&1 | while read -r line; do
+            log_error "sshd validation: $line"
+        done
+        return 1
+    fi
+
+    effective_ports="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | paste -sd ' ' -)"
+    for expected_port in $expected_ports; do
+        echo "$effective_ports" | grep -Eq "(^|[[:space:]])${expected_port}([[:space:]]|$)" || {
+            log_error "Effective SSH configuration does not include port $expected_port"
+            return 1
+        }
+        if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${expected_port}$"; then
+            log_error "SSH is not listening on port $expected_port"
+            return 1
+        fi
+        if command -v ssh-keyscan >/dev/null 2>&1 && \
+           ! timeout 5 ssh-keyscan -T 3 -p "$expected_port" 127.0.0.1 >/dev/null 2>&1; then
+            log_error "SSH on port $expected_port did not return a banner/key during local verification"
+            return 1
+        fi
+    done
+    return 0
+}
+
 ssh_main() {
     log_info "Starting SSH hardening..."
 
@@ -216,9 +252,13 @@ ssh_main() {
     fi
     
     if [ "$needs_update" = "false" ]; then
-        log_info "SSH configuration already matches desired settings"
-        state_mark "ssh" "completed"
-        return 0
+        log_info "SSH configuration already matches desired settings; verifying runtime"
+        if verify_ssh_runtime "$ssh_ports"; then
+            state_mark "ssh" "completed"
+            return 0
+        fi
+        log_error "SSH configuration appears unchanged, but runtime verification failed"
+        return 1
     fi
     
     # Apply changes

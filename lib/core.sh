@@ -501,10 +501,20 @@ prompt_choice() {
 # 6. 状态追踪
 #===============================================================================
 
+# Keep state keys independent of the display/order prefix used by MODULES.
+state_key() {
+    local module="$1"
+    case "$module" in
+        [0-9][0-9]_*) printf '%s\n' "${module#??_}" ;;
+        *) printf '%s\n' "$module" ;;
+    esac
+}
+
 # state_set: 记录模块完成状态
 state_set() {
     local module="$1"
     local status="$2"  # done | skipped | failed
+    module="$(state_key "$module")"
     local ts="$(date '+%Y-%m-%d %H:%M:%S')"
     if [[ -f "${STATE_FILE}" ]] && grep -q "^${module}=" "${STATE_FILE}" 2>/dev/null; then
         sed -i "s|^${module}=.*|${module}=${status}|" "${STATE_FILE}"
@@ -525,8 +535,11 @@ state_mark() {
 # state_get: 获取模块状态
 state_get() {
     local module="$1"
+    local key
+    key="$(state_key "$module")"
     if [[ -f "${STATE_FILE}" ]]; then
-        grep "^${module}=" "${STATE_FILE}" | tail -1 | cut -d'=' -f2
+        grep "^${key}=" "${STATE_FILE}" | tail -1 | cut -d'=' -f2 || \
+            grep "^${module}=" "${STATE_FILE}" | tail -1 | cut -d'=' -f2 || true
     fi
 }
 
@@ -794,11 +807,18 @@ print_completion_card() {
     local module_summary="${4:-}"
     local duration
     duration="$(format_duration "${elapsed}")"
+    local all_modules_skipped=false
+    if [[ "${MODULE_TOTAL:-0}" -gt 0 && "${DONE_COUNT:-0}" -eq 0 && \
+          "${FAILED_COUNT:-0}" -eq 0 && "${SKIPPED_COUNT:-0}" -eq "${MODULE_TOTAL}" ]]; then
+        all_modules_skipped=true
+    fi
 
     if [[ "${dry_run}" == "true" ]]; then
         print_section "试运行完成 / Dry-Run Complete"
     elif [[ "${FAILED_COUNT:-0}" -gt 0 ]]; then
         print_section "安装部分完成 / Setup Partially Completed"
+    elif [[ "$all_modules_skipped" == "true" ]]; then
+        print_section "未执行变更 / No Changes Applied"
     else
         print_section "安装完成 / Setup Complete"
     fi
@@ -834,6 +854,8 @@ print_completion_card() {
 
     if [[ "${dry_run}" != "true" && "${FAILED_COUNT:-0}" -gt 0 ]]; then
         echo -e "${RED}✗ 有 ${FAILED_COUNT} 个模块失败，请根据上方实际状态和日志修复后重试。${NC}"
+    elif [[ "${dry_run}" != "true" && "$all_modules_skipped" == "true" ]]; then
+        echo -e "${YELLOW}⚠ 本次没有执行任何模块；如需重新检查 SSH、防火墙或 Fail2ban，请使用 -f 强制执行。${NC}"
     elif [[ "${dry_run}" != "true" ]]; then
         echo -e "${YELLOW}⚠ 请立即保存 SSH 端口与登录信息；更改端口后请先新开终端验证再断开当前会话。${NC}"
     fi

@@ -65,10 +65,14 @@ fail2ban_main() {
 
     local ignore_ips="${FAIL2BAN_IGNOREIP:-127.0.0.1/8 ::1}"
     local detected_client_ip=""
-    if [ -n "${SSH_CLIENT:-}" ]; then
+    local management_ip=""
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+        detected_client_ip="${SSH_CONNECTION%% *}"
+    elif [ -n "${SSH_CLIENT:-}" ]; then
         detected_client_ip="${SSH_CLIENT%% *}"
     fi
     if [ -n "$detected_client_ip" ]; then
+        management_ip="$detected_client_ip"
         case " $ignore_ips " in
             *" $detected_client_ip "*) ;;
             *) ignore_ips="$ignore_ips $detected_client_ip" ;;
@@ -182,7 +186,8 @@ fail2ban_main() {
            grep -q "port.*$ssh_port" /etc/fail2ban/jail.local && \
            grep -q "^journalmatch = $ssh_journal_match$" /etc/fail2ban/jail.local && \
            grep -q "^banaction = $ban_action$" /etc/fail2ban/jail.local && \
-           grep -q "^action = $ban_action$" /etc/fail2ban/jail.local; then
+           grep -q "^action = $ban_action$" /etc/fail2ban/jail.local && \
+           { [ -z "$management_ip" ] || awk -v ip="$management_ip" '$1 == "ignoreip" { for (i = 3; i <= NF; i++) if ($i == ip) found = 1 } END { exit !found }' /etc/fail2ban/jail.local; }; then
             config_exists=true
         fi
     fi
@@ -202,6 +207,9 @@ fail2ban_main() {
             if ! systemctl is-active --quiet fail2ban 2>/dev/null && \
                ! service fail2ban status >/dev/null 2>&1; then
                 systemctl enable --now fail2ban 2>/dev/null || service fail2ban start 2>/dev/null || true
+            fi
+            if [ -n "$management_ip" ] && command -v fail2ban-client >/dev/null 2>&1; then
+                fail2ban-client set sshd unbanip "$management_ip" >/dev/null 2>&1 || true
             fi
             state_mark "fail2ban" "completed"
             return 0
@@ -301,6 +309,9 @@ fail2ban_main() {
     # Verify fail2ban is running
     sleep 2
     if fail2ban-client status >/dev/null 2>&1; then
+        if [ -n "$management_ip" ]; then
+            fail2ban-client set sshd unbanip "$management_ip" >/dev/null 2>&1 || true
+        fi
         # Get status
         local status
         status=$(fail2ban-client status 2>/dev/null || echo "Status unknown")

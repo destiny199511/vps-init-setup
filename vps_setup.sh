@@ -950,6 +950,13 @@ confirm_configuration_review() {
     done
 }
 
+module_requires_runtime_check() {
+    case "$1" in
+        05_ssh|06_firewall|07_fail2ban) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ===== 主程序 =====
 
 # 解析命令行参数
@@ -1145,7 +1152,8 @@ for module in "${MODULES_TO_RUN[@]}"; do
     print_module_progress "$MODULE_INDEX" "$MODULE_TOTAL" "$name" "$desc"
 
     # 检查是否已经完成（除非强制模式）
-    if [ "$FORCE_MODE" = false ] && [ "$(state_get "$name")" = "done" ]; then
+     if [ "$FORCE_MODE" = false ] && [ "$(state_get "$name")" = "done" ] && \
+         ! module_requires_runtime_check "$name"; then
         print_module_result "skipped" "$name" "已完成"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         MODULE_SUMMARY_LINES+="  ${YELLOW}~${NC} ${name}"$'\n'
