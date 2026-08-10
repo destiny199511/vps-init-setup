@@ -308,7 +308,7 @@ firewall_main() {
             fi
             
             # Make persistent if on Debian/Ubuntu
-            if [ "$(detect_os)" = "ubuntu" ] || [ "$(detect_os)" = "debian" ]; then
+            if [ "$(detect_os_id)" = "ubuntu" ] || [ "$(detect_os_id)" = "debian" ]; then
                 if [ ! -d /etc/iptables ]; then
                     mkdir -p /etc/iptables
                 fi
@@ -323,7 +323,7 @@ firewall_main() {
             fi
             
             # Make persistent if on RHEL/CentOS
-            if [ "$(detect_os)" = "centos" ] || [ "$(detect_os)" = "rhel" ] || [ "$(detect_os)" = "rocky" ] || [ "$(detect_os)" = "almalinux" ]; then
+            if [ "$(detect_os_id)" = "centos" ] || [ "$(detect_os_id)" = "rhel" ] || [ "$(detect_os_id)" = "rocky" ] || [ "$(detect_os_id)" = "almalinux" ]; then
                 service iptables save 2>/dev/null || true
                 service ip6tables save 2>/dev/null || true
             fi

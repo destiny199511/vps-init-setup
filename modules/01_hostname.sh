@@ -25,7 +25,7 @@ hostname_main() {
     # If not set, generate a default based on distro and timestamp
     if [ -z "$target_hostname" ]; then
         local distro timestamp
-        distro=$(detect_os)
+        distro=$(detect_os_id)
         timestamp=$(date '+%Y%m%d%H%M%S')
         target_hostname="${distro}-vps-${timestamp}"
         log_info "No hostname configured, using generated: $target_hostname"

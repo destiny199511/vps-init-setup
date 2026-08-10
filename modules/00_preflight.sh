@@ -42,7 +42,7 @@ preflight_main() {
     # 2. Check OS compatibility
     log_info "Checking OS compatibility..."
     local os_name
-    os_name=$(detect_os)
+    os_name=$(detect_os_id)
     log_info "Detected OS: $os_name"
 
     case "$os_name" in

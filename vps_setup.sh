@@ -633,6 +633,10 @@ configure_cleanup() {
                     res=0
                     input_box swap_size "请输入 Swap 大小 (如 2G, 4G, 8G，留空自动按内存计算):" "$swap_size" || res=$?
                     [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                    if [ -n "$swap_size" ] && [[ ! "$swap_size" =~ ^[1-9][0-9]*[KMG]$ ]]; then
+                        echo -e "${RED}Swap 大小必须使用正整数加 K/M/G 单位，例如 2G；留空表示自动计算${NC}"
+                        continue
+                    fi
                     sub_step=3
                 else
                     sub_step=6
@@ -1083,6 +1087,10 @@ if ! confirm_configuration_review "${#MODULES_TO_RUN[@]}"; then
     log_warn "用户取消安装。"
     exit 1
 fi
+
+# 配置确认后执行模块时复用向导结果，避免模块再次询问已确认的参数
+NON_INTERACTIVE=true
+INTERACTIVE_MODE=false
 
 # 记录开始时间与结果计数
 START_TIME=$(date +%s)

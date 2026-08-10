@@ -135,6 +135,12 @@ detect_os() {
     log_info "系统检测: ${OS_PRETTY} | ${ARCH}"
 }
 
+# detect_os_id: 返回标准化 OS ID，供命令替换使用，避免捕获日志文本
+detect_os_id() {
+    detect_os >/dev/null
+    printf '%s\n' "${OS_ID}"
+}
+
 detect_pkg_manager() {
     if   command -v apt-get &>/dev/null; then
         PKG_MGR="apt"; PKG_UPDATE="apt-get update -qq"
@@ -180,6 +186,21 @@ detect_service_manager() {
     log_info "服务管理器: ${SVC_MGR}"
 }
 
+# 兼容模块使用的旧检测接口
+detect_package_manager() {
+    [ -n "${PKG_MGR:-}" ] || detect_pkg_manager >/dev/null
+    printf '%s\n' "${PKG_MGR}"
+}
+
+detect_init_system() {
+    case "${SVC_MGR:-auto}" in
+        systemctl) printf '%s\n' "systemd" ;;
+        service) printf '%s\n' "sysvinit" ;;
+        rc-service) printf '%s\n' "openrc" ;;
+        *) printf '%s\n' "${SVC_MGR:-auto}" ;;
+    esac
+}
+
 detect_environment() {
     # 检测是否为容器
     if [[ -f /.dockerenv ]] || grep -q 'docker\|lxc\|container' /proc/1/cgroup 2>/dev/null; then
@@ -203,6 +224,20 @@ install_pkg() {
     fi
     eval "${PKG_INSTALL} ${pkg}" || die "软件包安装失败: ${pkg}"
     audit "PKG_INSTALL" "${pkg}"
+}
+
+# 兼容模块使用的旧安装接口
+install_package() {
+    local package_name
+    for package_name in "$@"; do
+        install_pkg "$package_name"
+    done
+}
+
+apt_update() {
+    if [[ -n "${PKG_UPDATE:-}" ]]; then
+        eval "${PKG_UPDATE}"
+    fi
 }
 
 # remove_pkg: 跨发行版卸载软件包
@@ -433,6 +468,14 @@ state_set() {
         echo "${module}=${status}" >> "${STATE_FILE}"
     fi
     log_debug "状态追踪 [${module}]: ${status}"
+}
+
+# state_mark: 兼容旧模块接口；completed 统一映射为 done
+state_mark() {
+    local module="$1"
+    local status="$2"
+    [ "$status" = "completed" ] && status="done"
+    state_set "$module" "$status"
 }
 
 # state_get: 获取模块状态

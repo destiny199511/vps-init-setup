@@ -47,7 +47,7 @@ dns_main() {
     else
         # Interactive mode
         printf '\033[1;33m'
-        read -r -p "Primary DNS server (current: ${current_namesensors%%,*}): " primary_dns
+        read -r -p "Primary DNS server (current: ${current_nameservers%%,*}): " primary_dns
         printf '\033[0m\n'
         
         if [ -z "$primary_dns" ]; then
@@ -57,7 +57,7 @@ dns_main() {
         fi
         
         printf '\033[1;33m'
-        read -r -p "Secondary DNS server (current: ${current_namesensors#*,}): " secondary_dns
+        read -r -p "Secondary DNS server (current: ${current_nameservers#*,}): " secondary_dns
         printf '\033[0m\n'
         
         if [ -z "$secondary_dns" ]; then
