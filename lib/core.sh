@@ -187,17 +187,47 @@ detect_service_manager() {
 }
 
 detect_firewall() {
-    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-        printf '%s\n' "ufw"
-    elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q '^running'; then
-        printf '%s\n' "firewalld"
-    elif command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -qE '(^|[[:space:]])(table|chain)[[:space:]]'; then
-        printf '%s\n' "nftables"
-    elif command -v iptables >/dev/null 2>&1 && iptables -S INPUT 2>/dev/null | grep -qvE '^-(P INPUT ACCEPT|A INPUT -j ACCEPT)$'; then
-        printf '%s\n' "iptables"
-    else
-        printf '%s\n' "none"
+    # Prefer managed frontends first. Docker injects raw iptables/nft rules even
+    # when UFW is the intended host firewall, so never treat Docker-only chains
+    # as a standalone iptables/nftables configuration.
+    if command -v ufw >/dev/null 2>&1; then
+        if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+            printf '%s\n' "ufw"
+            return 0
+        fi
+        # On Debian/Ubuntu, prefer UFW when installed even if currently inactive.
+        if [ -f /etc/os-release ] && grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu)' /etc/os-release 2>/dev/null; then
+            printf '%s\n' "ufw"
+            return 0
+        fi
     fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q '^running'; then
+        printf '%s\n' "firewalld"
+        return 0
+    fi
+    if command -v nft >/dev/null 2>&1; then
+        if nft list ruleset 2>/dev/null | grep -vE 'DOCKER|docker|br-|CNI-|KUBE-' | grep -qE '(^|[[:space:]])(table|chain)[[:space:]]'; then
+            # Ignore pure Docker/bridge tables when deciding host firewall type.
+            if nft list ruleset 2>/dev/null | grep -vE 'DOCKER|docker|br-|CNI-|KUBE-' | grep -qE 'hook (input|forward)'; then
+                printf '%s\n' "nftables"
+                return 0
+            fi
+        fi
+    fi
+    if command -v iptables >/dev/null 2>&1; then
+        local iptables_rules
+        iptables_rules="$(iptables-save 2>/dev/null | grep -vE 'DOCKER|docker0|br-|CNI-|KUBE-' || true)"
+        if echo "$iptables_rules" | grep -qE '^\*filter' && \
+           echo "$iptables_rules" | grep -qE '^:INPUT[[:space:]]+(DROP|REJECT)' ; then
+            printf '%s\n' "iptables"
+            return 0
+        fi
+        if echo "$iptables_rules" | grep -E '^-A INPUT' | grep -vqE '^-A INPUT -j (ACCEPT|RETURN)$'; then
+            printf '%s\n' "iptables"
+            return 0
+        fi
+    fi
+    printf '%s\n' "none"
 }
 
 # 兼容模块使用的旧检测接口
@@ -828,17 +858,46 @@ collect_actual_vps_status() {
     [ -z "$ACTUAL_TIMEZONE" ] && ACTUAL_TIMEZONE="$(cat /etc/timezone 2>/dev/null || true)"
     ACTUAL_TIMEZONE="${ACTUAL_TIMEZONE#/}"
     ACTUAL_TIMEZONE="${ACTUAL_TIMEZONE:-unknown}"
-    ACTUAL_LOCALE="$(locale 2>/dev/null | awk -F= '$1 == "LANG" {gsub(/"/, "", $2); print $2; exit}')"
+    ACTUAL_LOCALE="$(awk -F= '$1 == "LANG" {gsub(/"/, "", $2); print $2; exit}' /etc/default/locale 2>/dev/null || true)"
+    [ -z "$ACTUAL_LOCALE" ] && ACTUAL_LOCALE="$(locale 2>/dev/null | awk -F= '$1 == "LANG" {gsub(/"/, "", $2); print $2; exit}')"
     ACTUAL_LOCALE="${ACTUAL_LOCALE:-${LANG:-unknown}}"
-    ACTUAL_SSH_PORTS="$(ss -ltnH 2>/dev/null | awk '{print $4}' | paste -sd ',' -)"
+    # Prefer configured/effective SSH ports instead of dumping every local TCP port.
+    local effective_ssh_ports=""
+    if command -v sshd >/dev/null 2>&1; then
+        effective_ssh_ports="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -nu || true)"
+    fi
+    if [ -z "$effective_ssh_ports" ]; then
+        effective_ssh_ports="${SSH_PORT:-22}"
+    fi
+    ACTUAL_SSH_PORTS="$(ss -ltnH 2>/dev/null | awk -v ports="$effective_ssh_ports" '
+        BEGIN { count = split(ports, wanted, /[[:space:]]+/) }
+        {
+            addr = $4
+            port = addr
+            sub(/^.*:/, "", port)
+            for (i = 1; i <= count; i++) {
+                if (port == wanted[i]) print addr
+            }
+        }' | sort -u | paste -sd ',' -)"
+    if [ -z "$ACTUAL_SSH_PORTS" ]; then
+            ACTUAL_SSH_PORTS="$(printf '%s\n' "$effective_ssh_ports" | paste -sd ',' -)"
+    fi
     ACTUAL_SSH_PORTS="${ACTUAL_SSH_PORTS:-unknown}"
     ACTUAL_SSH_SERVICE="inactive"
-    if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
+    if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null || \
+       systemctl is-active --quiet ssh.socket 2>/dev/null || systemctl is-active --quiet sshd.socket 2>/dev/null; then
         ACTUAL_SSH_SERVICE="active"
     elif service ssh status >/dev/null 2>&1 || service sshd status >/dev/null 2>&1; then
         ACTUAL_SSH_SERVICE="active"
     fi
     ACTUAL_FIREWALL="$(detect_firewall 2>/dev/null || printf '%s' unknown)"
+    if [ "$ACTUAL_FIREWALL" = "ufw" ] && command -v ufw >/dev/null 2>&1; then
+        if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+            ACTUAL_FIREWALL="ufw(active)"
+        else
+            ACTUAL_FIREWALL="ufw(inactive)"
+        fi
+    fi
     ACTUAL_SWAP="$(swapon --show --noheadings 2>/dev/null | awk 'NR == 1 {print $1 "," $3; exit}')"
     ACTUAL_SWAP="${ACTUAL_SWAP:-none}"
     ACTUAL_DOCKER="not-installed"

@@ -19,11 +19,20 @@ firewall_main() {
     firewall_type=$(detect_firewall)
     log_info "Detected firewall system: $firewall_type"
 
-    if [ "$firewall_type" = "none" ]; then
+    # Prefer UFW on Debian/Ubuntu. Docker injects iptables rules that can make a
+    # host look like a raw iptables firewall even when UFW is the intended tool.
+    if [ "$firewall_type" = "iptables" ] || [ "$firewall_type" = "nftables" ] || [ "$firewall_type" = "none" ]; then
         if command -v apt-get >/dev/null 2>&1; then
-            log_info "No active firewall detected; installing UFW..."
-            install_package ufw
-            firewall_type="ufw"
+            if ! command -v ufw >/dev/null 2>&1; then
+                log_info "Installing UFW as the preferred managed firewall..."
+                install_package ufw
+            fi
+            if command -v ufw >/dev/null 2>&1; then
+                if [ "$firewall_type" != "ufw" ]; then
+                    log_warn "Overriding detected firewall '$firewall_type' with UFW on Debian/Ubuntu"
+                fi
+                firewall_type="ufw"
+            fi
         fi
     fi
     
@@ -86,7 +95,7 @@ firewall_main() {
     
     case "$firewall_type" in
         ufw)
-            if ufw status | grep -q "Status: active"; then
+            if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
                 # Check if our essential ports are allowed
                     ssh_ports_allowed=true
                     for configured_ssh_port in $ssh_ports; do
@@ -343,7 +352,8 @@ firewall_main() {
                 done
             fi
             
-            # Save rules
+            # Persist rules only after ensuring the target directory exists.
+            mkdir -p /etc/iptables
             if command -v iptables-save >/dev/null 2>&1; then
                 iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
                 ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
@@ -351,15 +361,13 @@ firewall_main() {
             
             # Make persistent if on Debian/Ubuntu
             if [ "$(detect_os_id)" = "ubuntu" ] || [ "$(detect_os_id)" = "debian" ]; then
-                if [ ! -d /etc/iptables ]; then
-                    mkdir -p /etc/iptables
-                fi
+                mkdir -p /etc/iptables
                 iptables-save > /etc/iptables/rules.v4
                 ip6tables-save > /etc/iptables/rules.v6
                 
                 # Ensure netfilter-persistent is installed
                 if ! dpkg -l netfilter-persistent >/dev/null 2>&1; then
-                    install_package netfilter-persistent
+                    install_package netfilter-persistent iptables-persistent 2>/dev/null || install_package iptables-persistent 2>/dev/null || true
                 fi
                 invoke-rc.d netfilter-persistent save 2>/dev/null || true
             fi

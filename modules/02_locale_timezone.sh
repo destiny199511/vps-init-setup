@@ -127,24 +127,34 @@ locale_timezone_main() {
                         install_package language-pack-zh-hant 2>/dev/null || true
                         ;;
                 esac
-                # Check if locale already generated
-                if ! locale -a 2>/dev/null | grep -qiE "^${target_locale//./\\.}$|^${target_locale//UTF-8/utf8}$"; then
-                    if ! locale-gen "$target_locale"; then
-                        log_error "Failed to generate locale: $target_locale"
-                        return 1
+                # Explicitly enable the requested locale before generation.
+                if [ -f /etc/locale.gen ]; then
+                    backup_file /etc/locale.gen >/dev/null 2>&1 || true
+                    if grep -qiE "^[# ]*${target_locale//./\\.}([[:space:]]|$)" /etc/locale.gen; then
+                        sed -i -E "s/^[# ]*(${target_locale//./\\.}([[:space:]].*)?)$/\\1/" /etc/locale.gen
+                    else
+                        printf '%s UTF-8\n' "$target_locale" >> /etc/locale.gen
                     fi
                 fi
-                # update-locale writes a consistent /etc/default/locale without
-                # forcing the current shell into a locale that is still loading.
+                # Generate the requested locale explicitly (language packs may only
+                # enable sibling locales such as zh_SG.UTF-8).
+                if ! locale-gen "$target_locale" 2>/dev/null; then
+                    log_warn "locale-gen $target_locale failed; retrying full locale-gen"
+                    locale-gen 2>/dev/null || true
+                fi
+                if ! locale -a 2>/dev/null | grep -qiE "^${target_locale//./\\.}$|^${target_locale//UTF-8/utf8}$"; then
+                    log_error "Failed to generate locale: $target_locale"
+                    return 1
+                fi
+                # Prefer LANG only for system default; LC_ALL is session override.
                 if command -v update-locale >/dev/null 2>&1; then
-                    update-locale LANG="$target_locale" LC_ALL="$target_locale" LANGUAGE="$target_locale" 2>/dev/null || {
-                        printf 'LANG=%s\nLANGUAGE=%s\nLC_ALL=%s\n' "$target_locale" "$target_locale" "$target_locale" > /etc/default/locale
+                    update-locale LANG="$target_locale" LANGUAGE="$target_locale" LC_ALL= 2>/dev/null || {
+                        printf 'LANG=%s\nLANGUAGE=%s\n' "$target_locale" "$target_locale" > /etc/default/locale
                     }
                 else
                     {
                         echo "LANG=$target_locale"
                         echo "LANGUAGE=$target_locale"
-                        echo "LC_ALL=$target_locale"
                     } > /etc/default/locale
                 fi
                 ;;
@@ -179,11 +189,20 @@ locale_timezone_main() {
         # Export for current session only when the locale is actually available.
         if locale -a 2>/dev/null | grep -qiE "^${target_locale//./\\.}$|^${target_locale//UTF-8/utf8}$"; then
             export LANG="$target_locale"
-            export LC_ALL="$target_locale"
+            unset LC_ALL 2>/dev/null || true
         else
             log_warn "Locale $target_locale written to config but not yet active in this shell"
             export LANG="$target_locale"
             unset LC_ALL 2>/dev/null || true
+        fi
+
+        # Verify effective system default for reporting.
+        local effective_lang
+        effective_lang="$(awk -F= '$1 == "LANG" {gsub(/"/, "", $2); print $2; exit}' /etc/default/locale 2>/dev/null || true)"
+        if [ "$effective_lang" = "$target_locale" ]; then
+            log_info "System default locale set to: $target_locale"
+        else
+            log_warn "System default locale is ${effective_lang:-unknown}; expected $target_locale"
         fi
         
         changes_made=true

@@ -95,6 +95,15 @@ fail2ban_main() {
         esac
     done
     log_info "Fail2ban SSH ports: $ssh_ports; ignore IPs: $ignore_ips"
+
+    # Ubuntu uses ssh.service; classic distros use sshd.service. Match one
+    # concrete unit so journald does not receive an impossible AND expression.
+    local ssh_journal_match='_SYSTEMD_UNIT=sshd.service'
+    if systemctl list-unit-files ssh.service --no-legend 2>/dev/null | grep -q '^ssh\.service' || \
+       systemctl is-active --quiet ssh 2>/dev/null || \
+       systemctl is-active --quiet ssh.socket 2>/dev/null; then
+        ssh_journal_match='_SYSTEMD_UNIT=ssh.service'
+    fi
     
     # Determine ban settings
     local ban_time findtime maxretry
@@ -170,7 +179,10 @@ fail2ban_main() {
     if [ -f /etc/fail2ban/jail.local ]; then
         if grep -q "^\\[sshd\\]" /etc/fail2ban/jail.local && \
            grep -q "enabled\s*=\s*true" /etc/fail2ban/jail.local && \
-           grep -q "port.*$ssh_port" /etc/fail2ban/jail.local; then
+           grep -q "port.*$ssh_port" /etc/fail2ban/jail.local && \
+           grep -q "^journalmatch = $ssh_journal_match$" /etc/fail2ban/jail.local && \
+           grep -q "^banaction = $ban_action$" /etc/fail2ban/jail.local && \
+           grep -q "^action = $ban_action$" /etc/fail2ban/jail.local; then
             config_exists=true
         fi
     fi
@@ -206,6 +218,7 @@ fail2ban_main() {
         echo ""
         echo "# Use the action matching the active firewall backend: $firewall_type"
         echo "banaction = $ban_action"
+        echo "banaction_allports = $ban_action_allports"
         echo ""
         echo "# Email notifications:"
         if [ -n "$email_action" ]; then
@@ -224,7 +237,8 @@ fail2ban_main() {
         echo "filter = sshd"
         echo "port = $ssh_ports"
         echo "action = $ban_action"
-        echo "logpath = %(sshd_log)s"
+        echo "backend = systemd"
+        echo "journalmatch = $ssh_journal_match"
         echo "maxretry = $maxretry"
         echo "findtime = $findtime"
         echo "bantime = $ban_time"
@@ -234,11 +248,16 @@ fail2ban_main() {
         echo "enabled = true"
         echo "filter = recidive"
         echo "logpath = /var/log/fail2ban.log"
+        echo "backend = auto"
         echo "action = $ban_action_allports"
         echo "bantime = 604800"
         echo "findtime = 86400"
         echo "maxretry = 5"
     } > /etc/fail2ban/jail.local
+
+    # recidive reads fail2ban's own logfile; ensure it exists before start.
+    touch /var/log/fail2ban.log 2>/dev/null || true
+    chmod 640 /var/log/fail2ban.log 2>/dev/null || true
     
     # Create jail.d directory if it doesn't exist
     mkdir -p /etc/fail2ban/jail.d

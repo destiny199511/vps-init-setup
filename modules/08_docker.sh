@@ -31,20 +31,39 @@ docker_main() {
             systemctl start docker 2>/dev/null || service docker start 2>/dev/null || true
         fi
         
-        # In non-interactive mode, we might still want to configure
-        if [ "${NON_INTERACTIVE:-false}" = "true" ]; then
-            # Still need to ensure configuration is applied
-            :
-        else
-            read -r -p "Docker already installed. Reconfigure/upgrade? [y/N] " choice
-            case "$choice" in
-                y|Y|yes|Yes) ;;
-                *) 
-                    log_info "Skipping Docker installation"
-                    state_mark "docker" "completed"
-                    return 0
-                    ;;
-            esac
+        # Already installed and running: skip reinstall unless forced.
+        if [ "${FORCE:-false}" != "true" ] && [ "${FORCE_MODE:-false}" != "true" ]; then
+            if [ "${NON_INTERACTIVE:-false}" = "true" ]; then
+                log_info "Docker already installed and running - skipping reinstall"
+                # Still ensure daemon.json baseline exists without reinstalling packages.
+                if [ ! -f /etc/docker/daemon.json ]; then
+                    mkdir -p /etc/docker
+                    cat > /etc/docker/daemon.json << 'EOFDOCKER'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "live-restore": true,
+  "userland-proxy": false
+}
+EOFDOCKER
+                    systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+                fi
+                state_mark "docker" "completed"
+                return 0
+            else
+                read -r -p "Docker already installed. Reconfigure/upgrade? [y/N] " choice
+                case "$choice" in
+                    y|Y|yes|Yes) ;;
+                    *)
+                        log_info "Skipping Docker installation"
+                        state_mark "docker" "completed"
+                        return 0
+                        ;;
+                esac
+            fi
         fi
     else
         log_info "Docker not found - will install"
@@ -98,10 +117,10 @@ docker_main() {
             # Install prerequisites
             install_package ca-certificates curl gnupg lsb-release
             
-            # Add Docker's official GPG key
+            # Add Docker's official GPG key (non-interactive overwrite)
             mkdir -p /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/$(detect_os_id)/gpg | \
-                gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            curl -fsSL "https://download.docker.com/linux/$(detect_os_id)/gpg" | \
+                gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
             
             # Set up the repository
             echo \

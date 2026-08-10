@@ -182,7 +182,9 @@ EOF
         log_info "Cleaning package manager cache..."
         case "$PKG_MGR" in
             apt|apt-get)
-                apt-get autoremove -y 2>/dev/null || true
+                # Clean package caches only. Do not run unrestricted autoremove on
+                # cloud images: it can remove kernel headers/microcode accessories
+                # that are still useful for AWS/GCP guests.
                 apt-get autoclean -y 2>/dev/null || true
                 apt-get clean 2>/dev/null || true
                 # Remove only concrete old kernel images. Never purge meta packages
@@ -195,10 +197,15 @@ EOF
                     grep -E '^linux-image-[0-9]' | \
                     grep -vF "$current_kernel" | \
                     grep -Ev 'linux-image-(aws|generic|virtual|cloud|oem|lowlatency|gke|gcp|azure|extra|unsigned)' || true)
-                for kernel in $old_kernels; do
-                    log_info "Removing old kernel: $kernel"
-                    apt-get purge -y "$kernel" 2>/dev/null || true
-                done
+                if [ -n "$old_kernels" ]; then
+                    for kernel in $old_kernels; do
+                        log_info "Removing old kernel: $kernel"
+                        apt-get purge -y "$kernel" 2>/dev/null || true
+                    done
+                    apt-get autoremove -y 2>/dev/null || true
+                else
+                    log_info "No obsolete concrete kernel images found to remove"
+                fi
                 # Clean apt lists
                 rm -rf /var/lib/apt/lists/* 2>/dev/null || true
                 log_info "APT cache cleaned, old kernels removed"

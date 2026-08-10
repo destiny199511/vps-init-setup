@@ -200,8 +200,6 @@ EOFAUDIT
         else
             log_warn "auditd failed to start properly"
         fi
-    else
-        install_package logwatch 2>/dev/null || true
     fi
 
     # SELinux / AppArmor
