@@ -694,14 +694,19 @@ print_review_card() {
     print_kv "DNS:" "${PRIMARY_DNS:-} / ${SECONDARY_DNS:-}"
     print_kv "SSH 端口:" "${SSH_PORT:-}"
     print_kv "Root 登录:" "${PERMIT_ROOT_LOGIN:-}"
-    print_kv "密码认证:" "${PASSWORD_AUTH:-}"
+    if [ "${PASSWORD_AUTH:-no}" = "yes" ]; then
+        print_kv "密码认证:" "yes (密码已设置: $([ -n "${USER_PASSWORD:-}" ] && echo 是 || echo 否))"
+    else
+        print_kv "密码认证:" "no"
+    fi
     print_kv "公钥认证:" "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-}}"
     print_kv "Fail2ban:" "${INSTALL_FAIL2BAN:-}"
     print_kv "Docker:" "${INSTALL_DOCKER:-}"
     print_kv "NPM:" "${INSTALL_NPM:-}"
     print_kv "备份:" "${ENABLE_BACKUP:-}"
     print_kv "监控:" "${ENABLE_MONITORING:-${INSTALL_NODE_EXPORTER:-}}"
-    print_kv "清理优化:" "swap=${ENABLE_SWAP:-} snap=${REMOVE_SNAP:-}"
+    print_kv "清理优化:" "swap=${ENABLE_SWAP:-} size=${SWAP_SIZE:-自动} file=${SWAP_FILE:-/swapfile} swappiness=${SWAPPINESS:-10} vfs_cache_pressure=${VFS_CACHE_PRESSURE:-50} snap=${REMOVE_SNAP:-} cache=${CLEAN_PKG_CACHE:-} journal=${CLEAN_JOURNAL:-}"
+    print_kv "防火墙 SSH:" "TCP/${SSH_PORT:-22} (将放行)"
     print_kv "将执行模块:" "${modules_count} 个"
     print_kv "配置文件:" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
     print_kv "日志文件:" "${LOG_FILE}"

@@ -39,6 +39,7 @@ WIZARD_TOTAL_STEPS=7
 MODULES=(
     "00_preflight:System preflight check"
     "01_hostname:Hostname and /etc/hosts"
+    "13_cleanup:System cleanup and optimization (swap, snap, cache)"
     "02_locale_timezone:Locale and timezone"
     "03_dns:DNS resolution"
     "04_user:Non-root user creation"
@@ -50,7 +51,6 @@ MODULES=(
     "10_backup:Automated backup system"
     "11_monitoring:System monitoring tools"
     "12_security:Security scanning and auditing"
-    "13_cleanup:System cleanup and optimization (swap, snap, cache)"
 )
 
 # 模块名称到文件名的映射（去掉前缀序号）
@@ -263,7 +263,7 @@ configure_system() {
                     "手动输入"*)
                         res=0
                         input_box timezone "请输入自定义时区:" "$timezone" || res=$?
-                        [ "$res" -eq 2 ] && continue
+                        [ "$res" -eq 2 ] && { sub_step=2; continue 2; }
                         ;;
                 esac
                 sub_step=3
@@ -321,6 +321,8 @@ configure_user() {
     local ssh_pubkey_auth="${SSH_PUBKEY_AUTH:-yes}"
     local ssh_pubkey="${SSH_PUBKEY:-}"
     local password_auth="${PASSWORD_AUTH:-no}"
+    local user_password="${USER_PASSWORD:-}"
+    local password_confirmation=""
     local res=0
 
     while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 3 ]; do
@@ -343,6 +345,7 @@ configure_user() {
                     "使用 SSH 公钥认证"*)
                         ssh_pubkey_auth="yes"
                         password_auth="no"
+                        user_password=""
                         ;;
                     "使用密码认证"*)
                         ssh_pubkey_auth="no"
@@ -357,6 +360,27 @@ configure_user() {
                 ;;
             3)
                 res=0
+                if [ "$password_auth" = "yes" ]; then
+                    while true; do
+                        res=0
+                        password_box user_password "请输入 ${username} 的 SSH 登录密码" || res=$?
+                        [ "$res" -eq 2 ] && { sub_step=2; continue 2; }
+                        if [ -z "$user_password" ]; then
+                            echo -e "${RED}密码不能为空；选择密码认证时必须设置登录密码。${NC}"
+                            continue
+                        fi
+                        res=0
+                        password_box password_confirmation "请再次输入密码确认" || res=$?
+                        [ "$res" -eq 2 ] && { sub_step=2; continue 2; }
+                        if [ "$user_password" != "$password_confirmation" ]; then
+                            echo -e "${RED}两次输入的密码不一致，请重试。${NC}"
+                            continue
+                        fi
+                        break
+                    done
+                else
+                    user_password=""
+                fi
                 if [ "$ssh_pubkey_auth" = "yes" ]; then
                     input_box ssh_pubkey "请输入 SSH 公钥 (留空则安装时自动生成密钥对):" "$ssh_pubkey" || res=$?
                     [ "$res" -eq 2 ] && { sub_step=2; continue; }
@@ -373,13 +397,14 @@ configure_user() {
     export SSH_PUBKEY="$ssh_pubkey"
     export PASSWORD_AUTH="$password_auth"
     export SSH_PUBKEY_AUTH="$ssh_pubkey_auth"
+    export USER_PASSWORD="$user_password"
 
     return 0
 }
 
 # 配置SSH设置
 configure_ssh() {
-    print_step "3/${WIZARD_TOTAL_STEPS}" "SSH 加固配置"
+    print_step "4/${WIZARD_TOTAL_STEPS}" "SSH 加固配置"
     echo -e "${DIM}建议使用非 22 端口，并限制 root 密码登录 (输入 b 可返回)${NC}"
 
     local sub_step=1
@@ -472,7 +497,7 @@ configure_ssh() {
 
 # 配置安全设置
 configure_security() {
-    print_step "4/${WIZARD_TOTAL_STEPS}" "安全组件配置"
+    print_step "5/${WIZARD_TOTAL_STEPS}" "安全组件配置"
     echo -e "${DIM}Fail2ban / 审计系统 / 强制访问控制策略 (输入 b 可返回)${NC}"
 
     local sub_step=1
@@ -522,7 +547,7 @@ configure_security() {
 
 # 配置服务设置
 configure_services() {
-    print_step "5/${WIZARD_TOTAL_STEPS}" "可选服务配置"
+    print_step "6/${WIZARD_TOTAL_STEPS}" "可选服务配置"
     echo -e "${DIM}Docker / Node.js(npm) 基础运行时环境 (输入 b 可返回)${NC}"
 
     local sub_step=1
@@ -561,7 +586,7 @@ configure_services() {
 
 # 配置备份和监控
 configure_backup_monitoring() {
-    print_step "6/${WIZARD_TOTAL_STEPS}" "备份与监控配置"
+    print_step "7/${WIZARD_TOTAL_STEPS}" "备份与监控配置"
     echo -e "${DIM}系统定时备份、Node Exporter 监控组件 (输入 b 可返回)${NC}"
 
     local sub_step=1
@@ -606,7 +631,7 @@ configure_backup_monitoring() {
 
 # 配置系统清洗和优化
 configure_cleanup() {
-    print_step "7/${WIZARD_TOTAL_STEPS}" "系统清理与优化"
+    print_step "3/${WIZARD_TOTAL_STEPS}" "系统清理与优化"
     echo -e "${DIM}Swap 交换空间 / Snap / 软件包缓存 / 日志限制 (输入 b 可返回)${NC}"
 
     local sub_step=1
@@ -770,11 +795,11 @@ run_configuration_wizard() {
         case "$current_step" in
             1) configure_system || res=$? ;;
             2) configure_user || res=$? ;;
-            3) configure_ssh || res=$? ;;
-            4) configure_security || res=$? ;;
-            5) configure_services || res=$? ;;
-            6) configure_backup_monitoring || res=$? ;;
-            7) configure_cleanup || res=$? ;;
+            3) configure_cleanup || res=$? ;;
+            4) configure_ssh || res=$? ;;
+            5) configure_security || res=$? ;;
+            6) configure_services || res=$? ;;
+            7) configure_backup_monitoring || res=$? ;;
         esac
 
         if [ "$res" -eq 2 ]; then
@@ -806,11 +831,11 @@ configure_by_sections() {
         echo -e "请选择需要单独配置或修改的项目:"
         echo -e "  1) 系统基础配置 (Step 1: Hostname / Timezone / DNS)"
         echo -e "  2) 用户账户配置 (Step 2: Username / SSH Key / Password)"
-        echo -e "  3) SSH 加固配置 (Step 3: SSH Port / Root Login)"
-        echo -e "  4) 安全组件配置 (Step 4: Fail2ban / Auditd / MAC)"
-        echo -e "  5) 可选服务配置 (Step 5: Docker / Node.js & NPM)"
-        echo -e "  6) 备份与监控配置 (Step 6: Backup / Node Exporter)"
-        echo -e "  7) 清理与优化配置 (Step 7: Swap / Snap / Cache / Journal)"
+        echo -e "  3) 清理与优化配置 (Step 3: Swap / Snap / Cache / Journal)"
+        echo -e "  4) SSH 加固配置 (Step 4: SSH Port / Root Login)"
+        echo -e "  5) 安全组件配置 (Step 5: Fail2ban / Auditd / MAC)"
+        echo -e "  6) 可选服务配置 (Step 6: Docker / Node.js & NPM)"
+        echo -e "  7) 备份与监控配置 (Step 7: Backup / Node Exporter)"
         echo -e "  0) 返回主菜单"
         echo -e "${GREEN}═══════════════════════════════════════════${NC}"
 
@@ -822,11 +847,11 @@ configure_by_sections() {
         case "$choice" in
             1) configure_system || res=$? ;;
             2) configure_user || res=$? ;;
-            3) configure_ssh || res=$? ;;
-            4) configure_security || res=$? ;;
-            5) configure_services || res=$? ;;
-            6) configure_backup_monitoring || res=$? ;;
-            7) configure_cleanup || res=$? ;;
+            3) configure_cleanup || res=$? ;;
+            4) configure_ssh || res=$? ;;
+            5) configure_security || res=$? ;;
+            6) configure_services || res=$? ;;
+            7) configure_backup_monitoring || res=$? ;;
             0|b|back) break ;;
             *) echo -e "${RED}无效选项，请输入 0-7${NC}" ;;
         esac

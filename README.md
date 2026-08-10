@@ -243,11 +243,11 @@ vps-init-setup/
 |------|------|--------|
 | Step 1 | 系统基础 | 主机名、时区、Locale、DNS |
 | Step 2 | 用户账户 | 用户名、SSH 公钥/密码、sudo |
-| Step 3 | SSH 加固 | 端口、禁止 root、认证方式、保活 |
-| Step 4 | 安全组件 | Fail2ban、auditd、MAC (SELinux/AppArmor) |
-| Step 5 | 可选服务 | Docker Engine、Node.js & NPM |
-| Step 6 | 备份与监控 | 自动备份、Netdata / Node Exporter |
-| Step 7 | 清理与优化 | Swap、Snap、包缓存、Journal、无用服务 |
+| Step 3 | 清理与优化 | Swap、Snap、包缓存、Journal、无用服务 |
+| Step 4 | SSH 加固 | 端口、禁止 root、认证方式、保活 |
+| Step 5 | 安全组件 | Fail2ban、auditd、MAC 策略 |
+| Step 6 | 可选服务 | Docker、Node.js 与 npm |
+| Step 7 | 备份与监控 | 自动备份、Node Exporter |
 
 **导航键**：
 - `回车` / 直接输入数字 — 确认默认值或选择项
@@ -267,11 +267,11 @@ vps-init-setup/
 请选择需要单独配置或修改的项目:
   1) 系统基础配置 (Step 1: Hostname / Timezone / DNS)
   2) 用户账户配置 (Step 2: Username / SSH Key / Password)
-  3) SSH 加固配置 (Step 3: SSH Port / Root Login)
-  4) 安全组件配置 (Step 4: Fail2ban / Auditd / MAC)
-  5) 可选服务配置 (Step 5: Docker / Node.js & NPM)
-  6) 备份与监控配置 (Step 6: Backup / Node Exporter)
-  7) 清理与优化配置 (Step 7: Swap / Snap / Cache / Journal)
+  3) 清理与优化配置 (Step 3: Swap / Snap / Cache / Journal)
+  4) SSH 加固配置 (Step 4: SSH Port / Root Login)
+  5) 安全组件配置 (Step 5: Fail2ban / Auditd / MAC)
+  6) 可选服务配置 (Step 6: Docker / Node.js & NPM)
+  7) 备份与监控配置 (Step 7: Backup / Node Exporter)
   0) 返回主菜单
 ═══════════════════════════════════════════
 ```

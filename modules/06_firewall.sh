@@ -85,7 +85,7 @@ firewall_main() {
         ufw)
             if ufw status | grep -q "Status: active"; then
                 # Check if our essential ports are allowed
-                if ufw status | grep -q "$ssh_port/tcp.*ALLOW" && \
+                     if ufw status | awk -v port="$ssh_port/tcp" '$1 == port && $2 == "ALLOW" {found=1} END {exit !found}' && \
                    ufw status | grep -q "$http_port/tcp.*ALLOW" && \
                    ufw status | grep -q "$https_port/tcp.*ALLOW"; then
                     already_configured=true

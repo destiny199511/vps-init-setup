@@ -83,6 +83,7 @@ user_main() {
     local create_home="${CREATE_HOME:-true}"
     local add_to_sudo="${ADD_TO_SUDO:-true}"
     local setup_ssh="${SETUP_SSH:-true}"
+    local pubkey_authentication="${SSH_PUBKEY_AUTHENTICATION:-${SSH_PUBKEY_AUTH:-yes}}"
     
     # Create user if doesn't exist
     if ! id "$username" &>/dev/null; then
@@ -116,7 +117,7 @@ user_main() {
     fi
     
     # Set up SSH access
-    if [ "$setup_ssh" = "true" ]; then
+    if [ "$setup_ssh" = "true" ] && [ "$pubkey_authentication" = "yes" ]; then
         log_info "Setting up SSH access for user: $username"
         
         local user_home user_ssh_dir authorized_keys
@@ -248,33 +249,24 @@ user_main() {
         audit "SUDO_CONFIGURED" "username=$username"
     fi
     
-    # Set password if requested (only in interactive mode and when not setting up SSH)
-    local set_password=false
-    if [ "${NON_INTERACTIVE:-false}" = "false" ] && [ "$setup_ssh" != "true" ]; then
-        # Only ask for password if not setting up SSH keys (to avoid confusion)
-        printf '\033[1;33m'
-        read -r -p "Set password for user? [y/N] " choice
-        printf '\033[0m\n'
-        case "$choice" in
-            y|Y) set_password=true ;;
-            *) set_password=false ;;
-        esac
-        
-        if [ "$set_password" = "true" ]; then
-            log_info "Setting password for user: $username"
-            # Use stdin to pass password twice
-            {
-                echo "$USER_PASSWORD"
-                echo "$USER_PASSWORD"
-            } | passwd "$username" 2>/dev/null
-            
-            if [ $? -eq 0 ]; then
-                log_info "Password set successfully"
-                changes_made=true
-                audit "USER_PASSWORD_SET" "username=$username"
-            else
-                log_warn "Failed to set password (this might be OK if password disabled)"
-            fi
+    # Password authentication requires an actual password, even when public-key
+    # authentication is enabled as a second login method.
+    local password_authentication="${PASSWORD_AUTH:-no}"
+    local user_password="${USER_PASSWORD:-}"
+    if [ "$password_authentication" = "yes" ]; then
+        if [ -z "$user_password" ]; then
+            log_error "Password authentication is enabled, but no user password was provided"
+            return 1
+        fi
+
+        log_info "Setting password for user: $username"
+        if printf '%s:%s\n' "$username" "$user_password" | chpasswd 2>/dev/null; then
+            log_info "Password set successfully"
+            changes_made=true
+            audit "USER_PASSWORD_SET" "username=$username"
+        else
+            log_error "Failed to set password for user: $username"
+            return 1
         fi
     fi
     
