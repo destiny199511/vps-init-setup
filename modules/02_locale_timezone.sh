@@ -118,19 +118,35 @@ locale_timezone_main() {
         log_info "Generating locale: $target_locale"
         case "$(detect_package_manager)" in
             apt)
+                # Ensure language packs exist for common non-C locales.
+                case "$target_locale" in
+                    zh_CN.UTF-8|zh_CN.utf8)
+                        install_package language-pack-zh-hans 2>/dev/null || true
+                        ;;
+                    zh_TW.UTF-8|zh_TW.utf8)
+                        install_package language-pack-zh-hant 2>/dev/null || true
+                        ;;
+                esac
                 # Check if locale already generated
-                if ! locale -a 2>/dev/null | grep -qiE "^${target_locale//-/.}$|^${target_locale//UTF-8/utf8}$"; then
+                if ! locale -a 2>/dev/null | grep -qiE "^${target_locale//./\\.}$|^${target_locale//UTF-8/utf8}$"; then
                     if ! locale-gen "$target_locale"; then
                         log_error "Failed to generate locale: $target_locale"
                         return 1
                     fi
                 fi
-                # Update locale configuration
-                {
-                    echo "LANG=$target_locale"
-                    echo "LANGUAGE=$target_locale"
-                    echo "LC_ALL=$target_locale"
-                } > /etc/default/locale
+                # update-locale writes a consistent /etc/default/locale without
+                # forcing the current shell into a locale that is still loading.
+                if command -v update-locale >/dev/null 2>&1; then
+                    update-locale LANG="$target_locale" LC_ALL="$target_locale" LANGUAGE="$target_locale" 2>/dev/null || {
+                        printf 'LANG=%s\nLANGUAGE=%s\nLC_ALL=%s\n' "$target_locale" "$target_locale" "$target_locale" > /etc/default/locale
+                    }
+                else
+                    {
+                        echo "LANG=$target_locale"
+                        echo "LANGUAGE=$target_locale"
+                        echo "LC_ALL=$target_locale"
+                    } > /etc/default/locale
+                fi
                 ;;
             yum|dnf)
                 if ! locale -a 2>/dev/null | grep -q "^$target_locale$"; then
@@ -160,9 +176,15 @@ locale_timezone_main() {
                 ;;
         esac
         
-        # Export for current session
-        export LANG="$target_locale"
-        export LC_ALL="$target_locale"
+        # Export for current session only when the locale is actually available.
+        if locale -a 2>/dev/null | grep -qiE "^${target_locale//./\\.}$|^${target_locale//UTF-8/utf8}$"; then
+            export LANG="$target_locale"
+            export LC_ALL="$target_locale"
+        else
+            log_warn "Locale $target_locale written to config but not yet active in this shell"
+            export LANG="$target_locale"
+            unset LC_ALL 2>/dev/null || true
+        fi
         
         changes_made=true
         audit "LOCALE_CHANGED" "from=$current_locale to=$target_locale"

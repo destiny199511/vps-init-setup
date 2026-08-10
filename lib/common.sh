@@ -226,7 +226,7 @@ apply_config_defaults() {
     : "${INSTALL_DOCKER:=true}"
     : "${INSTALL_NPM:=false}"
     : "${DOMAIN:=example.com}"
-    : "${INSTALL_NODE_EXPORTER:=true}"
+    : "${INSTALL_NODE_EXPORTER:=false}"
     : "${INSTALL_FAIL2BAN:=true}"
     : "${INSTALL_AUDITD:=false}"
     : "${ENABLE_SELINUX_CHECK:=true}"

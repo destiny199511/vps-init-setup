@@ -185,11 +185,16 @@ EOF
                 apt-get autoremove -y 2>/dev/null || true
                 apt-get autoclean -y 2>/dev/null || true
                 apt-get clean 2>/dev/null || true
-                # Remove old kernels (keep current + 1)
+                # Remove only concrete old kernel images. Never purge meta packages
+                # such as linux-image-aws / linux-image-generic which reinstall
+                # the latest kernel package and can break cloud images.
                 local current_kernel
                 current_kernel=$(uname -r)
                 local old_kernels
-                old_kernels=$(dpkg -l | grep 'linux-image' | awk '{print $2}' | grep -v "$current_kernel" | grep -v "linux-image-generic" 2>/dev/null || true)
+                old_kernels=$(dpkg -l 'linux-image-*' 2>/dev/null | awk '/^ii/ {print $2}' | \
+                    grep -E '^linux-image-[0-9]' | \
+                    grep -vF "$current_kernel" | \
+                    grep -Ev 'linux-image-(aws|generic|virtual|cloud|oem|lowlatency|gke|gcp|azure|extra|unsigned)' || true)
                 for kernel in $old_kernels; do
                     log_info "Removing old kernel: $kernel"
                     apt-get purge -y "$kernel" 2>/dev/null || true

@@ -38,14 +38,30 @@ fail2ban_main() {
     ssh_ports="${ssh_ports:-${SSH_PORT:-22}}"
     ssh_port="${ssh_ports%%,*}"
 
-    local firewall_type ban_action
+    local firewall_type ban_action ban_action_allports
     firewall_type="$(detect_firewall)"
     case "$firewall_type" in
-        ufw) ban_action="ufw" ;;
-        firewalld) ban_action="firewallcmd-ipset" ;;
-        nftables) ban_action="nftables-multiport" ;;
-        *) ban_action="iptables-multiport" ;;
+        ufw)
+            ban_action="ufw"
+            ban_action_allports="ufw"
+            ;;
+        firewalld)
+            ban_action="firewallcmd-ipset"
+            ban_action_allports="firewallcmd-ipset"
+            ;;
+        nftables)
+            ban_action="nftables-multiport"
+            ban_action_allports="nftables-allports"
+            ;;
+        *)
+            ban_action="iptables-multiport"
+            ban_action_allports="iptables-allports"
+            ;;
     esac
+    # Fall back when the preferred all-ports action is not packaged.
+    if [ ! -f "/etc/fail2ban/action.d/${ban_action_allports}.conf" ]; then
+        ban_action_allports="$ban_action"
+    fi
 
     local ignore_ips="${FAIL2BAN_IGNOREIP:-127.0.0.1/8 ::1}"
     local detected_client_ip=""
@@ -128,7 +144,7 @@ fail2ban_main() {
                 email_action="action_mwl"
                 ;;
             *)
-                email_action="action_"
+                email_action=""
                 ;;
         esac
     fi
@@ -218,9 +234,9 @@ fail2ban_main() {
         echo "enabled = true"
         echo "filter = recidive"
         echo "logpath = /var/log/fail2ban.log"
-        echo "action = iptables-all"
-        echo "bantime = 604800  ; 1 week"
-        echo "findtime = 86400  ; 1 day"
+        echo "action = $ban_action_allports"
+        echo "bantime = 604800"
+        echo "findtime = 86400"
         echo "maxretry = 5"
     } > /etc/fail2ban/jail.local
     

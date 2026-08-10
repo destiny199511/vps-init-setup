@@ -14,15 +14,27 @@ monitoring_prerequisites() {
 monitoring_main() {
     log_info "Starting monitoring setup..."
 
-    local tools_enabled netdata_enabled prometheus_node_enabled
+    local tools_enabled netdata_enabled prometheus_node_enabled install_basic_tools
     tools_enabled=false
     netdata_enabled=false
     prometheus_node_enabled=false
+    install_basic_tools=false
 
     if [ "${NON_INTERACTIVE:-false}" = "true" ]; then
-        tools_enabled="${MONITORING_ENABLED:-true}"
+        # Prefer wizard/config values over legacy MONITORING_* env names.
+        if [ "${ENABLE_MONITORING:-false}" = "true" ] || [ "${MONITORING_ENABLED:-false}" = "true" ]; then
+            tools_enabled=true
+            install_basic_tools=true
+        else
+            tools_enabled=false
+            install_basic_tools=false
+        fi
         netdata_enabled="${MONITORING_NETDATA_ENABLED:-false}"
-        prometheus_node_enabled="${MONITORING_PROMETHEUS_NODE_ENABLED:-false}"
+        if [ "${INSTALL_NODE_EXPORTER:-false}" = "true" ] || [ "${MONITORING_PROMETHEUS_NODE_ENABLED:-false}" = "true" ]; then
+            prometheus_node_enabled=true
+        else
+            prometheus_node_enabled=false
+        fi
     else
         read -r -p "Install monitoring tools? [Y/n] " choice
         case "$choice" in
@@ -51,7 +63,8 @@ monitoring_main() {
         fi
     fi
 
-    if [ "$tools_enabled" = "false" ] && [ "$netdata_enabled" = "false" ] && [ "$prometheus_node_enabled" = "false" ]; then
+    if [ "$tools_enabled" = "false" ] && [ "$install_basic_tools" = "false" ] && \
+       [ "$netdata_enabled" = "false" ] && [ "$prometheus_node_enabled" = "false" ]; then
         log_info "No monitoring components selected - skipping"
         state_mark "monitoring" "completed"
         return 0

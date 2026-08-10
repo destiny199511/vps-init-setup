@@ -25,12 +25,27 @@ security_main() {
     selinux_enabled=false
 
     if [ "${NON_INTERACTIVE:-false}" = "true" ]; then
-        install_scanners="${SECURITY_SCANNERS_ENABLED:-true}"
-        lynis_enabled="${SECURITY_LYNIS_ENABLED:-true}"
-        rkhunter_enabled="${SECURITY_RKHUNTER_ENABLED:-true}"
+        # Prefer wizard/config keys; keep SECURITY_* as optional overrides.
+        install_scanners="${SECURITY_SCANNERS_ENABLED:-false}"
+        lynis_enabled="${SECURITY_LYNIS_ENABLED:-false}"
+        rkhunter_enabled="${SECURITY_RKHUNTER_ENABLED:-false}"
         chkrootkit_enabled="${SECURITY_CHKROOTKIT_ENABLED:-false}"
-        auditd_enabled="${SECURITY_AUDITD_ENABLED:-true}"
-        selinux_enabled="${SECURITY_SELINUX_ENABLED:-false}"
+        if [ -n "${INSTALL_AUDITD:-}" ]; then
+            case "${INSTALL_AUDITD}" in
+                true|yes|1|on|ON) auditd_enabled=true ;;
+                *) auditd_enabled=false ;;
+            esac
+        else
+            auditd_enabled="${SECURITY_AUDITD_ENABLED:-false}"
+        fi
+        if [ -n "${ENABLE_SELINUX_CHECK:-}" ]; then
+            case "${ENABLE_SELINUX_CHECK}" in
+                true|yes|1|on|ON) selinux_enabled=true ;;
+                *) selinux_enabled=false ;;
+            esac
+        else
+            selinux_enabled="${SECURITY_SELINUX_ENABLED:-false}"
+        fi
     else
         read -r -p "Install security scanners (Lynis, rkhunter)? [Y/n] " choice
         case "$choice" in
