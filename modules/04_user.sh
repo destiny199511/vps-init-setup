@@ -139,9 +139,23 @@ user_main() {
         
         case "$ssh_key_source" in
             "")
-                # No SSH key configured - generate one for the user
-                log_info "Generating SSH key pair for $username..."
-                if sudo -u "$username" ssh-keygen -t ed25519 -f "$user_ssh_dir/id_ed25519" -N "" -q; then
+                if [ -s "$authorized_keys" ]; then
+                    log_info "Existing authorized_keys found for $username; preserving existing SSH keys"
+                else
+                    # Generate a key only when the user has no existing authorized_keys.
+                    log_info "Generating SSH key pair for $username..."
+                    if [ -f "$user_ssh_dir/id_ed25519" ]; then
+                        if sudo -u "$username" ssh-keygen -y -f "$user_ssh_dir/id_ed25519" > "$user_ssh_dir/id_ed25519.pub" 2>/dev/null; then
+                            log_info "Recovered public key from existing private key"
+                        else
+                            log_error "Existing private key could not be used to recover a public key"
+                            return 1
+                        fi
+                    elif ! sudo -u "$username" ssh-keygen -t ed25519 -f "$user_ssh_dir/id_ed25519" -N "" -q; then
+                        log_error "Failed to generate SSH key pair"
+                        return 1
+                    fi
+
                     # Set permissions
                     chmod 600 "$user_ssh_dir/id_ed25519"
                     chmod 644 "$user_ssh_dir/id_ed25519.pub"
@@ -166,19 +180,20 @@ user_main() {
                     
                     audit "SSH_KEY_GENERATED" "username=$username key_type=ed25519"
                     changes_made=true
-                else
-                    log_error "Failed to generate SSH key pair"
-                    return 1
                 fi
                 ;;
             *)
                 if [ -n "$ssh_key_source" ]; then
                     # Validate it looks like a SSH public key
                     if echo "$ssh_key_source" | grep -qE '^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp)'; then
-                        echo "$ssh_key_source" > "$authorized_keys"
+                        if ! grep -Fqx -- "$ssh_key_source" "$authorized_keys" 2>/dev/null; then
+                            printf '%s\n' "$ssh_key_source" >> "$authorized_keys"
+                            log_info "SSH public key appended without removing existing keys"
+                        else
+                            log_info "SSH public key already present"
+                        fi
                         chmod 600 "$authorized_keys"
                         chown "$username:$username" "$authorized_keys"
-                        log_info "SSH public key installed"
                         changes_made=true
                         audit "SSH_KEY_INSTALLED" "username=$username"
                     else
