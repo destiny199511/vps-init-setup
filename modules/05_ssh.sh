@@ -77,10 +77,19 @@ verify_ssh_runtime() {
             log_error "SSH is not listening on port $expected_port"
             return 1
         fi
-        if command -v ssh-keyscan >/dev/null 2>&1 && \
-           ! timeout 5 ssh-keyscan -T 3 -p "$expected_port" 127.0.0.1 >/dev/null 2>&1; then
-            log_error "SSH on port $expected_port did not return a banner/key during local verification"
-            return 1
+        if command -v ssh-keyscan >/dev/null 2>&1; then
+            local banner_verified=false
+            timeout 5 ssh-keyscan -T 3 -p "$expected_port" 127.0.0.1 >/dev/null 2>&1 && banner_verified=true
+            if [ "$banner_verified" != "true" ]; then
+                timeout 5 ssh-keyscan -T 3 -p "$expected_port" ::1 >/dev/null 2>&1 && banner_verified=true
+            fi
+            if [ "$banner_verified" != "true" ]; then
+                log_error "SSH on port $expected_port did not return a banner/key on local IPv4 or IPv6"
+                journalctl -u ssh -u sshd --no-pager -n 20 2>/dev/null | while read -r line; do
+                    log_error "SSH runtime: $line"
+                done
+                return 1
+            fi
         fi
     done
     return 0

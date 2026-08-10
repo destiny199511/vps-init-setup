@@ -100,14 +100,9 @@ fail2ban_main() {
     done
     log_info "Fail2ban SSH ports: $ssh_ports; ignore IPs: $ignore_ips"
 
-    # Ubuntu uses ssh.service; classic distros use sshd.service. Match one
-    # concrete unit so journald does not receive an impossible AND expression.
-    local ssh_journal_match='_SYSTEMD_UNIT=sshd.service'
-    if systemctl list-unit-files ssh.service --no-legend 2>/dev/null | grep -q '^ssh\.service' || \
-       systemctl is-active --quiet ssh 2>/dev/null || \
-       systemctl is-active --quiet ssh.socket 2>/dev/null; then
-        ssh_journal_match='_SYSTEMD_UNIT=ssh.service'
-    fi
+    # Match the sshd process directly; unit names differ across Ubuntu builds
+    # and combining two _SYSTEMD_UNIT predicates creates an impossible match.
+    local ssh_journal_match='_COMM=sshd'
     
     # Determine ban settings
     local ban_time findtime maxretry

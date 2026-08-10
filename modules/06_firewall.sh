@@ -19,23 +19,6 @@ firewall_main() {
     firewall_type=$(detect_firewall)
     log_info "Detected firewall system: $firewall_type"
 
-    # Prefer UFW on Debian/Ubuntu. Docker injects iptables rules that can make a
-    # host look like a raw iptables firewall even when UFW is the intended tool.
-    if [ "$firewall_type" = "iptables" ] || [ "$firewall_type" = "nftables" ] || [ "$firewall_type" = "none" ]; then
-        if command -v apt-get >/dev/null 2>&1; then
-            if ! command -v ufw >/dev/null 2>&1; then
-                log_info "Installing UFW as the preferred managed firewall..."
-                install_package ufw
-            fi
-            if command -v ufw >/dev/null 2>&1; then
-                if [ "$firewall_type" != "ufw" ]; then
-                    log_warn "Overriding detected firewall '$firewall_type' with UFW on Debian/Ubuntu"
-                fi
-                firewall_type="ufw"
-            fi
-        fi
-    fi
-    
     # Backup current firewall state if possible
     case "$firewall_type" in
         ufw)
@@ -234,10 +217,14 @@ firewall_main() {
             fi
             
             # Enable UFW
-            echo "y" | ufw enable
+            if ! printf 'y\n' | ufw enable 2>&1; then
+                log_error "Failed to enable UFW; existing firewall state was not trusted as migrated"
+                ufw disable >/dev/null 2>&1 || true
+                return 1
+            fi
             
             # Verify status
-            if ufw status | grep -q "Status: active"; then
+            if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
                 log_info "UFW enabled and configured successfully"
                 changes_made=true
                 audit "FIREWALL_CONFIGURED" "type=ufw ssh_port=$ssh_port http=$http_port https=$https_port"
@@ -308,35 +295,25 @@ firewall_main() {
         iptables)
             log_info "Configuring iptables firewall..."
             
-            # Flush existing rules
-            iptables -F
-            iptables -X
-            iptables -t nat -F
-            iptables -t nat -X
-            iptables -t mangle -F
-            iptables -t mangle -X
-            
-            # Set default policies
-            iptables -P INPUT DROP
-            iptables -P FORWARD DROP
-            iptables -P OUTPUT ACCEPT
-            
-            # Allow loopback traffic
-            iptables -A INPUT -i lo -j ACCEPT
-            iptables -A OUTPUT -o lo -j ACCEPT
-            
-            # Allow established and related connections
-            iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-            
-            # Allow incoming SSH, HTTP, HTTPS
+            # Preserve existing rules and Docker chains; only add missing
+            # baseline rules required for this setup.
+            iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -I INPUT -i lo -j ACCEPT
+            iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+            # Allow incoming SSH, HTTP, HTTPS without flushing active rules.
             for configured_ssh_port in $ssh_ports; do
-                iptables -A INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT
+                iptables -C INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
+                    iptables -I INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT
             done
-            iptables -A INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT
-            iptables -A INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT
+            iptables -C INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT
+            iptables -C INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT
             
             # Allow ping (ICMP echo request)
-            iptables -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+            iptables -C INPUT -p icmp --icmp-type echo-request -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -p icmp --icmp-type echo-request -j ACCEPT
             
             # Additional ports
             if [ -n "$open_additional_ports" ]; then
@@ -344,7 +321,8 @@ firewall_main() {
                 for port in "${PORTS[@]}"; do
                     port=$(echo "$port" | xargs)
                     if validate_port "$port"; then
-                        iptables -A INPUT -p tcp --dport "$port" -m state --state NEW -j ACCEPT
+                        iptables -C INPUT -p tcp --dport "$port" -m state --state NEW -j ACCEPT 2>/dev/null || \
+                            iptables -I INPUT -p tcp --dport "$port" -m state --state NEW -j ACCEPT
                         log_info "Added additional port: $port/tcp"
                     else
                         log_warn "Skipping invalid port: $port"

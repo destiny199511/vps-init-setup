@@ -195,11 +195,6 @@ detect_firewall() {
             printf '%s\n' "ufw"
             return 0
         fi
-        # On Debian/Ubuntu, prefer UFW when installed even if currently inactive.
-        if [ -f /etc/os-release ] && grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu)' /etc/os-release 2>/dev/null; then
-            printf '%s\n' "ufw"
-            return 0
-        fi
     fi
     if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q '^running'; then
         printf '%s\n' "firewalld"
@@ -226,6 +221,11 @@ detect_firewall() {
             printf '%s\n' "iptables"
             return 0
         fi
+    fi
+    if command -v ufw >/dev/null 2>&1 && [ -f /etc/os-release ] && \
+       grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu)' /etc/os-release 2>/dev/null; then
+        printf '%s\n' "ufw"
+        return 0
     fi
     printf '%s\n' "none"
 }
