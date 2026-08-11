@@ -29,6 +29,7 @@ INTERACTIVE_MODE=true
 NON_INTERACTIVE=false
 DRY_RUN=false
 FORCE_MODE=false
+FORCE=false
 AUTO_YES="${AUTO_YES:-false}"
 ACTION="install" # install, rollback, status
 SELECTED_MODULES=() # 如果为空则表示所有模块
@@ -957,6 +958,51 @@ module_requires_runtime_check() {
     esac
 }
 
+validate_access_configuration() {
+    local username="${USERNAME:-appadmin}"
+    local password_enabled="${PASSWORD_AUTH:-no}"
+    local pubkey_enabled="${SSH_PUBKEY_AUTHENTICATION:-${SSH_PUBKEY_AUTH:-no}}"
+    local has_password=false
+    local has_pubkey=false
+    local authorized_keys=""
+
+    if [ "$password_enabled" != "yes" ] && [ "$pubkey_enabled" != "yes" ]; then
+        log_error "SSH authentication is disabled: enable password or public-key authentication"
+        return 1
+    fi
+
+    if [ -n "${USER_PASSWORD:-}" ]; then
+        has_password=true
+    elif id "$username" >/dev/null 2>&1 && command -v passwd >/dev/null 2>&1 && \
+         passwd -S "$username" 2>/dev/null | awk '$2 ~ /^P/ {found=1} END {exit !found}'; then
+        has_password=true
+    fi
+
+    if id "$username" >/dev/null 2>&1; then
+        authorized_keys="$(getent passwd "$username" | cut -d: -f6)/.ssh/authorized_keys"
+        if [ -s "$authorized_keys" ] && grep -qE '^(ssh-|ecdsa-sha2-)' "$authorized_keys"; then
+            has_pubkey=true
+        fi
+    elif [ -n "${SSH_PUBKEY:-}" ] && echo "$SSH_PUBKEY" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
+        has_pubkey=true
+    fi
+
+    if [ "$password_enabled" = "yes" ] && [ "$has_password" != "true" ]; then
+        log_error "Password authentication is enabled, but $username has no usable password"
+        log_error "Set it with: sudo passwd $username, then rerun the setup"
+        return 1
+    fi
+    if [ "$pubkey_enabled" = "yes" ] && [ "$has_pubkey" != "true" ] && [ "$password_enabled" != "yes" ]; then
+        log_error "Public-key authentication is enabled, but no authorized SSH public key is available"
+        return 1
+    fi
+    if [ "$has_password" != "true" ] && [ "$has_pubkey" != "true" ]; then
+        log_error "No usable SSH authentication method is available for $username"
+        return 1
+    fi
+    return 0
+}
+
 # ===== 主程序 =====
 
 # 解析命令行参数
@@ -1028,6 +1074,9 @@ EOF
             ;;
     esac
 done
+
+FORCE="$FORCE_MODE"
+export FORCE
 
 # 初始化系统探测与启动横幅
 MODE_LABEL="交互式配置向导"
@@ -1121,6 +1170,26 @@ if [ ${#MODULES_TO_RUN[@]} -eq 0 ]; then
 fi
 
 # 安装前 Review
+# A complete run can create the user in 04_user. SSH-only runs must already
+# have a usable credential, while dry-run remains a no-change preview.
+requires_existing_access=false
+for module in "${MODULES_TO_RUN[@]}"; do
+    case "${module%%:*}" in
+        05_ssh|06_firewall|07_fail2ban)
+            requires_existing_access=true
+            ;;
+        04_user)
+            requires_existing_access=false
+            break
+            ;;
+    esac
+done
+if [ "$DRY_RUN" != "true" ] && [ "$requires_existing_access" = "true" ] && \
+   ! validate_access_configuration; then
+    log_error "安全检查失败，未执行任何模块以避免锁死 SSH 访问"
+    exit 1
+fi
+
 if ! confirm_configuration_review "${#MODULES_TO_RUN[@]}"; then
     log_warn "用户取消安装。"
     exit 1

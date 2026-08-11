@@ -221,6 +221,10 @@ detect_firewall() {
             printf '%s\n' "iptables"
             return 0
         fi
+        # iptables is still the available backend when the host has only the
+        # default ACCEPT policy and no managed firewall is active.
+        printf '%s\n' "iptables"
+        return 0
     fi
     if command -v ufw >/dev/null 2>&1 && [ -f /etc/os-release ] && \
        grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu)' /etc/os-release 2>/dev/null; then
@@ -863,9 +867,9 @@ print_completion_card() {
     echo -e "${BOLD}下一步 / 常用命令:${NC}"
     cat <<EOF
 ┌───────────────────────────────────────────────────────┐
-│  sudo ./vps_setup.sh --status                         │
-│  sudo ./vps_setup.sh -n --modules 05_ssh              │
-│  sudo ./vps_setup.sh -d -n                            │
+│  sudo ${SCRIPT_ROOT}/vps_setup.sh --status             │
+│  sudo ${SCRIPT_ROOT}/vps_setup.sh -n --modules 05_ssh │
+│  sudo ${SCRIPT_ROOT}/vps_setup.sh -d -n                │
 │  tail -f ${LOG_FILE}
 └───────────────────────────────────────────────────────┘
 EOF

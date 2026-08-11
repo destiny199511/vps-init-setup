@@ -84,6 +84,7 @@ user_main() {
     local add_to_sudo="${ADD_TO_SUDO:-true}"
     local setup_ssh="${SETUP_SSH:-true}"
     local pubkey_authentication="${SSH_PUBKEY_AUTHENTICATION:-${SSH_PUBKEY_AUTH:-yes}}"
+    local password_authentication="${PASSWORD_AUTH:-no}"
     
     # Create user if doesn't exist
     if ! id "$username" &>/dev/null; then
@@ -141,45 +142,11 @@ user_main() {
             "")
                 if [ -s "$authorized_keys" ]; then
                     log_info "Existing authorized_keys found for $username; preserving existing SSH keys"
+                elif [ "$password_authentication" = "yes" ]; then
+                    log_warn "No SSH public key supplied; skipping server-side key generation because password authentication is enabled"
                 else
-                    # Generate a key only when the user has no existing authorized_keys.
-                    log_info "Generating SSH key pair for $username..."
-                    if [ -f "$user_ssh_dir/id_ed25519" ]; then
-                        if sudo -u "$username" ssh-keygen -y -f "$user_ssh_dir/id_ed25519" > "$user_ssh_dir/id_ed25519.pub" 2>/dev/null; then
-                            log_info "Recovered public key from existing private key"
-                        else
-                            log_error "Existing private key could not be used to recover a public key"
-                            return 1
-                        fi
-                    elif ! sudo -u "$username" ssh-keygen -t ed25519 -f "$user_ssh_dir/id_ed25519" -N "" -q; then
-                        log_error "Failed to generate SSH key pair"
-                        return 1
-                    fi
-
-                    # Set permissions
-                    chmod 600 "$user_ssh_dir/id_ed25519"
-                    chmod 644 "$user_ssh_dir/id_ed25519.pub"
-                    chown "$username:$username" "$user_ssh_dir"/id_ed25519*
-                    
-                    # Copy public key to authorized_keys
-                    cp "$user_ssh_dir/id_ed25519.pub" "$authorized_keys"
-                    chmod 600 "$authorized_keys"
-                    chown "$username:$username" "$authorized_keys"
-                    
-                    # Display the private key (ONLY ONCE!)
-                    echo ""
-                    echo "========================================================================"
-                    echo "SSH PRIVATE KEY FOR USER '$username' (SAVE THIS SECURELY!)"
-                    echo "========================================================================"
-                    cat "$user_ssh_dir/id_ed25519"
-                    echo ""
-                    echo "========================================================================"
-                    echo "NEVER transmit this key over unsecured channels!"
-                    echo "Store it in a password manager or secure location."
-                    echo "========================================================================"
-                    
-                    audit "SSH_KEY_GENERATED" "username=$username key_type=ed25519"
-                    changes_made=true
+                    log_error "Public-key authentication requires an SSH public key for $username"
+                    return 1
                 fi
                 ;;
             *)
@@ -197,7 +164,8 @@ user_main() {
                         changes_made=true
                         audit "SSH_KEY_INSTALLED" "username=$username"
                     else
-                        log_warn "Provided SSH key doesn't appear valid - skipping"
+                        log_error "Provided SSH key doesn't appear valid"
+                        [ "$password_authentication" = "yes" ] || return 1
                     fi
                 fi
                 ;;
@@ -266,22 +234,25 @@ user_main() {
     
     # Password authentication requires an actual password, even when public-key
     # authentication is enabled as a second login method.
-    local password_authentication="${PASSWORD_AUTH:-no}"
     local user_password="${USER_PASSWORD:-}"
     if [ "$password_authentication" = "yes" ]; then
         if [ -z "$user_password" ]; then
-            log_error "Password authentication is enabled, but no user password was provided"
-            return 1
-        fi
-
-        log_info "Setting password for user: $username"
-        if printf '%s:%s\n' "$username" "$user_password" | chpasswd 2>/dev/null; then
-            log_info "Password set successfully"
-            changes_made=true
-            audit "USER_PASSWORD_SET" "username=$username"
+            if passwd -S "$username" 2>/dev/null | awk '$2 ~ /^P/ {found=1} END {exit !found}'; then
+                log_info "Password authentication enabled; preserving existing password for $username"
+            else
+                log_error "Password authentication is enabled, but no user password was provided"
+                return 1
+            fi
         else
-            log_error "Failed to set password for user: $username"
-            return 1
+            log_info "Setting password for user: $username"
+            if printf '%s:%s\n' "$username" "$user_password" | chpasswd 2>/dev/null; then
+                log_info "Password set successfully"
+                changes_made=true
+                audit "USER_PASSWORD_SET" "username=$username"
+            else
+                log_error "Failed to set password for user: $username"
+                return 1
+            fi
         fi
     fi
     

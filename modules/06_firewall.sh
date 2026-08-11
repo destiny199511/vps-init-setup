@@ -115,9 +115,11 @@ firewall_main() {
                     ssh_ports_allowed=false
                 fi
             done
-            if [ "$ssh_ports_allowed" = "true" ] && \
-               iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$http_port" && \
-               iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$https_port"; then
+                if [ "$ssh_ports_allowed" = "true" ] && \
+                    iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$http_port" && \
+                    iptables -L INPUT -v -n 2>/dev/null | grep -q "dpt:$https_port" && \
+                    iptables -S INPUT 2>/dev/null | grep -q -- '-P INPUT DROP' && \
+                    { ! command -v ip6tables >/dev/null 2>&1 || ip6tables -S INPUT 2>/dev/null | grep -q -- '-P INPUT DROP'; }; then
                 already_configured=true
             fi
             ;;
@@ -177,15 +179,16 @@ firewall_main() {
     case "$firewall_type" in
         ufw)
             log_info "Configuring UFW firewall..."
+            local ufw_was_active=false
+            if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+                ufw_was_active=true
+            fi
             
             # Ensure UFW is installed
             if ! command -v ufw >/dev/null 2>&1; then
                 log_info "Installing UFW..."
                 install_package ufw
             fi
-            
-            # Reset to known state
-            ufw --force reset
             
             # Set default policies
             ufw default deny incoming
@@ -217,10 +220,11 @@ firewall_main() {
             fi
             
             # Enable UFW
-            if ! printf 'y\n' | ufw enable 2>&1; then
-                log_error "Failed to enable UFW; existing firewall state was not trusted as migrated"
-                ufw disable >/dev/null 2>&1 || true
-                return 1
+            if [ "$ufw_was_active" != "true" ]; then
+                if ! printf 'y\n' | ufw enable 2>&1; then
+                    log_error "Failed to enable UFW; leaving it inactive without disabling another firewall"
+                    return 1
+                fi
             fi
             
             # Verify status
@@ -314,6 +318,35 @@ firewall_main() {
             # Allow ping (ICMP echo request)
             iptables -C INPUT -p icmp --icmp-type echo-request -j ACCEPT 2>/dev/null || \
                 iptables -I INPUT -p icmp --icmp-type echo-request -j ACCEPT
+
+            # Apply the restrictive host policy only after all recovery rules
+            # are present. Keep Docker forwarding intact when its chains exist.
+            iptables -P INPUT DROP
+            if ! iptables-save 2>/dev/null | grep -q '^-A FORWARD .*DOCKER'; then
+                iptables -P FORWARD DROP
+            fi
+            iptables -P OUTPUT ACCEPT
+
+            if command -v ip6tables >/dev/null 2>&1; then
+                ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || ip6tables -I INPUT -i lo -j ACCEPT
+                ip6tables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+                    ip6tables -I INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+                for configured_ssh_port in $ssh_ports; do
+                    ip6tables -C INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
+                        ip6tables -I INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT
+                done
+                ip6tables -C INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
+                    ip6tables -I INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT
+                ip6tables -C INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
+                    ip6tables -I INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT
+                ip6tables -C INPUT -p ipv6-icmp -j ACCEPT 2>/dev/null || \
+                    ip6tables -I INPUT -p ipv6-icmp -j ACCEPT
+                ip6tables -P INPUT DROP
+                if ! ip6tables-save 2>/dev/null | grep -q '^-A FORWARD .*DOCKER'; then
+                    ip6tables -P FORWARD DROP
+                fi
+                ip6tables -P OUTPUT ACCEPT
+            fi
             
             # Additional ports
             if [ -n "$open_additional_ports" ]; then

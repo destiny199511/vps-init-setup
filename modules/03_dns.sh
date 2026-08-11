@@ -138,8 +138,9 @@ dns_main() {
         
         # Verify configuration
         if command -v resolvectl >/dev/null 2>&1; then
-            current_dns=$(resolvectl dns 2>/dev/null | grep 'Current DNS Server:' | head -1 | awk '{print $4}')
-            if [ "$current_dns" = "$primary_dns" ]; then
+            current_dns=$(resolvectl dns 2>/dev/null | awk '$1 == "Global:" {for (i = 2; i <= NF; i++) print $i}' | tr '\n' ' ')
+            if printf '%s\n' "$current_dns" | grep -qw "$primary_dns" && \
+               printf '%s\n' "$current_dns" | grep -qw "$secondary_dns"; then
                 log_info "systemd-resolved DNS configured successfully"
                 changes_made=true
                 audit "DNS_CONFIGURED" "mode=systemd-resolved primary=$primary_dns secondary=$secondary_dns"

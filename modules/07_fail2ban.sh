@@ -282,6 +282,20 @@ fail2ban_main() {
         echo "[nginx-badbots]"
         echo "enabled = false"
     } > /etc/fail2ban/jail.d/00-disable-unsafe.conf
+
+    # Override distribution and legacy jail.d files with a late, managed file.
+    {
+        echo "[sshd]"
+        echo "enabled = true"
+        echo "filter = sshd"
+        echo "port = $ssh_ports"
+        echo "action = $ban_action"
+        echo "backend = systemd"
+        echo "journalmatch = $ssh_journal_match"
+        echo "maxretry = $maxretry"
+        echo "findtime = $findtime"
+        echo "bantime = $ban_time"
+    } > /etc/fail2ban/jail.d/99-vps-init-setup.conf
     
     # Validate before touching the running service; a bad jail must not take
     # down an otherwise usable security service.
@@ -295,15 +309,27 @@ fail2ban_main() {
 
     # Restart fail2ban service
     log_info "Starting Fail2ban service..."
-    if systemctl daemon-reload 2>/dev/null; then
-        systemctl enable --now fail2ban
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable fail2ban >/dev/null 2>&1 || true
+        if ! systemctl restart fail2ban; then
+            log_error "Failed to restart Fail2ban after configuration update"
+            return 1
+        fi
     else
-        service fail2ban restart 2>/dev/null || true
+        service fail2ban restart 2>/dev/null || return 1
     fi
     
     # Verify fail2ban is running
     sleep 2
     if fail2ban-client status >/dev/null 2>&1; then
+        local runtime_journalmatch
+        runtime_journalmatch="$(fail2ban-client get sshd journalmatch 2>/dev/null || true)"
+        if ! printf '%s\n' "$runtime_journalmatch" | grep -Fq "$ssh_journal_match"; then
+            log_error "Fail2ban sshd jail is not using the expected journalmatch: $runtime_journalmatch"
+            fail2ban-client status sshd 2>/dev/null || true
+            return 1
+        fi
         if [ -n "$management_ip" ]; then
             fail2ban-client set sshd unbanip "$management_ip" >/dev/null 2>&1 || true
         fi

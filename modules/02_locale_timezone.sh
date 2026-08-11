@@ -148,8 +148,9 @@ locale_timezone_main() {
                 fi
                 # Prefer LANG only for system default; LC_ALL is session override.
                 if command -v update-locale >/dev/null 2>&1; then
-                    update-locale LANG="$target_locale" LANGUAGE="$target_locale" LC_ALL= 2>/dev/null || {
-                        printf 'LANG=%s\nLANGUAGE=%s\n' "$target_locale" "$target_locale" > /etc/default/locale
+                    local language_value="${target_locale%%.*}:${target_locale%%_*}"
+                    update-locale LANG="$target_locale" LANGUAGE="$language_value" LC_ALL= 2>/dev/null || {
+                        printf 'LANG=%s\nLANGUAGE=%s\n' "$target_locale" "$language_value" > /etc/default/locale
                     }
                 else
                     {
@@ -274,7 +275,9 @@ locale_timezone_main() {
         if [ -f /etc/default/locale ]; then
             # shellcheck disable=SC1091
             . /etc/default/locale
-            export LANG LC_ALL
+            export LANG
+            [ -n "${LANGUAGE:-}" ] && export LANGUAGE || true
+            unset LC_ALL 2>/dev/null || true
         fi
         
         log_info "Locale and timezone configuration completed"
