@@ -8,7 +8,7 @@ Usage: sudo bash install.sh [options]
 Options:
   --repo-url URL      GitHub repository URL (default: ${REPO_URL})
   --ref REF           GitHub release tag or branch to install (default: ${REF})
-  --install-dir DIR   Target directory (default: ${INSTALL_DIR})
+    --install-dir DIR   Target directory (default: ${INSTALL_DIR})
     --update-only       Update files without starting the setup wizard
   --help              Show this help
 
@@ -181,9 +181,12 @@ else
         fi
     done
 
-    rm -rf "$INSTALL_DIR"
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    cp -R "$extracted_dir" "$INSTALL_DIR"
+    # Keep INSTALL_DIR itself so callers currently in it retain a valid cwd.
+    mkdir -p "$INSTALL_DIR"
+    find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
+        ! -name config ! -name logs ! -name backups \
+        -exec rm -rf -- {} +
+    cp -a "$extracted_dir/." "$INSTALL_DIR/"
 
     for data_dir in config logs backups; do
         if [ -d "$preserved_dir/$data_dir" ]; then
@@ -196,6 +199,13 @@ fi
 
 cd "$INSTALL_DIR"
 chmod +x vps_setup.sh
+
+for required_file in vps_setup.sh lib/core.sh lib/common.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
+    if [ ! -f "$INSTALL_DIR/$required_file" ]; then
+        echo "Installation is incomplete: missing $INSTALL_DIR/$required_file"
+        exit 1
+    fi
+done
 
 if [ "$RUN_SETUP" = "false" ]; then
     echo "Update complete. Setup wizard was not started."

@@ -14,6 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/core.sh"
 source "${SCRIPT_DIR}/lib/common.sh"
+cd "${SCRIPT_DIR}"
 
 # HOSTNAME is commonly pre-populated by the shell; configuration must come from
 # VPS_SETUP_HOSTNAME, the config file, or the interactive wizard instead.
@@ -62,7 +63,7 @@ for module in "${MODULES[@]}"; do
     # 我们通过前两个字符匹配
     num="${name:0:2}"
     name_without_num="${name:3}"
-    MODULE_FILES["$name"]="modules/${num}_${name_without_num}.sh"
+    MODULE_FILES["$name"]="${SCRIPT_DIR}/modules/${num}_${name_without_num}.sh"
 done
 
 # ===== 辅助函数 =====
