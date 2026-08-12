@@ -384,8 +384,12 @@ configure_user() {
                     user_password=""
                 fi
                 if [ "$ssh_pubkey_auth" = "yes" ]; then
-                    input_box ssh_pubkey "请输入 SSH 公钥 (留空则安装时自动生成密钥对):" "$ssh_pubkey" || res=$?
+                    input_box ssh_pubkey "请输入 SSH 公钥（仅公钥认证时不能为空）:" "$ssh_pubkey" || res=$?
                     [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                    if [ "$password_auth" != "yes" ] && ! printf '%s\n' "$ssh_pubkey" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
+                        echo -e "${RED}仅公钥认证必须提供有效 SSH 公钥；也可返回上一步改用密码认证。${NC}"
+                        continue
+                    fi
                 else
                     ssh_pubkey=""
                 fi
@@ -979,13 +983,14 @@ validate_access_configuration() {
         has_password=true
     fi
 
+    if [ -n "${SSH_PUBKEY:-}" ] && printf '%s\n' "$SSH_PUBKEY" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
+        has_pubkey=true
+    fi
     if id "$username" >/dev/null 2>&1; then
         authorized_keys="$(getent passwd "$username" | cut -d: -f6)/.ssh/authorized_keys"
         if [ -s "$authorized_keys" ] && grep -qE '^(ssh-|ecdsa-sha2-)' "$authorized_keys"; then
             has_pubkey=true
         fi
-    elif [ -n "${SSH_PUBKEY:-}" ] && echo "$SSH_PUBKEY" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
-        has_pubkey=true
     fi
 
     if [ "$password_enabled" = "yes" ] && [ "$has_password" != "true" ]; then
@@ -1171,21 +1176,18 @@ if [ ${#MODULES_TO_RUN[@]} -eq 0 ]; then
 fi
 
 # 安装前 Review
-# A complete run can create the user in 04_user. SSH-only runs must already
-# have a usable credential, while dry-run remains a no-change preview.
-requires_existing_access=false
+# Any plan that changes SSH-facing controls must have a usable credential for
+# the target account, including a full run where 04_user creates that account.
+requires_access_validation=false
 for module in "${MODULES_TO_RUN[@]}"; do
     case "${module%%:*}" in
         05_ssh|06_firewall|07_fail2ban)
-            requires_existing_access=true
-            ;;
-        04_user)
-            requires_existing_access=false
+            requires_access_validation=true
             break
             ;;
     esac
 done
-if [ "$DRY_RUN" != "true" ] && [ "$requires_existing_access" = "true" ] && \
+if [ "$DRY_RUN" != "true" ] && [ "$requires_access_validation" = "true" ] && \
    ! validate_access_configuration; then
     log_error "安全检查失败，未执行任何模块以避免锁死 SSH 访问"
     exit 1
@@ -1282,6 +1284,12 @@ for module in "${MODULES_TO_RUN[@]}"; do
             print_module_result "failed" "$name" "详见日志"
             FAILED_COUNT=$((FAILED_COUNT + 1))
             MODULE_SUMMARY_LINES+="  ${RED}✗${NC} ${name}"$'\n'
+            case "$name" in
+                00_preflight|04_user|05_ssh|06_firewall)
+                    log_error "关键模块 $name 执行失败；停止后续模块以避免扩大系统或远程访问风险"
+                    break
+                    ;;
+            esac
         fi
     else
         log_warn "模块 $name 没有定义 _main 函数，跳过。"

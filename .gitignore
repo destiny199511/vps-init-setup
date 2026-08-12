@@ -4,6 +4,9 @@
 *.tmp
 *.log
 
+config/install-result.env
+config/.state
+
 logs/*
 !logs/.gitkeep
 

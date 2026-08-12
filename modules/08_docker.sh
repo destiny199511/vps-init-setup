@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Docker Module - Install and configure Docker Engine
 #
@@ -13,6 +13,115 @@ docker_prerequisites() {
         log_warn "Running inside a container - Docker installation may not work as expected"
     fi
     return 0
+}
+
+docker_json_list() {
+    local values="$1"
+    local value trimmed first=true
+    local -a entries
+
+    IFS=',' read -ra entries <<< "$values"
+    printf '['
+    for value in "${entries[@]}"; do
+        trimmed="$(echo "$value" | xargs)"
+        [ -n "$trimmed" ] || continue
+        if [[ ! "$trimmed" =~ ^[A-Za-z0-9._:/@+=-]+$ ]]; then
+            log_error "Unsupported character in Docker list value: $trimmed"
+            return 1
+        fi
+        if [ "$first" = false ]; then
+            printf ', '
+        fi
+        printf '"%s"' "$trimmed"
+        first=false
+    done
+    printf ']'
+}
+
+docker_json_log_options() {
+    local values="$1"
+    local value key setting first=true
+    local -a entries
+
+    IFS=',' read -ra entries <<< "$values"
+    printf '{'
+    for value in "${entries[@]}"; do
+        setting="$(echo "$value" | xargs)"
+        [ -n "$setting" ] || continue
+        if [[ ! "$setting" =~ ^([A-Za-z][A-Za-z0-9_.-]*)=([A-Za-z0-9._:/@+=-]+)$ ]]; then
+            log_error "Invalid Docker log option: $setting"
+            return 1
+        fi
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+        if [ "$first" = false ]; then
+            printf ', '
+        fi
+        printf '"%s": "%s"' "$key" "$value"
+        first=false
+    done
+    printf '}'
+}
+
+docker_write_daemon_config() {
+    local config_path="$1"
+    local cgroup_driver="$2"
+    local log_driver="$3"
+    local log_opts="$4"
+    local insecure_registries="$5"
+    local registry_mirrors="$6"
+    local live_restore="$7"
+    local log_opts_json insecure_registries_json registry_mirrors_json candidate
+
+    case "$cgroup_driver" in
+        systemd|cgroupfs) ;;
+        *)
+            log_error "Unsupported Docker cgroup driver: $cgroup_driver"
+            return 1
+            ;;
+    esac
+    case "$log_driver" in
+        json-file|local|journald|syslog|gelf|fluentd|awslogs|splunk|gcplogs|none) ;;
+        *)
+            log_error "Unsupported Docker log driver: $log_driver"
+            return 1
+            ;;
+    esac
+    case "$live_restore" in
+        true|false) ;;
+        *)
+            log_error "Docker live-restore must be true or false"
+            return 1
+            ;;
+    esac
+    if ! log_opts_json="$(docker_json_log_options "$log_opts")" || \
+       ! insecure_registries_json="$(docker_json_list "$insecure_registries")" || \
+       ! registry_mirrors_json="$(docker_json_list "$registry_mirrors")"; then
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$config_path")"
+    candidate="$(mktemp "$(dirname "$config_path")/.daemon.json.XXXXXX")"
+    {
+        echo "{"
+        echo "  \"log-driver\": \"$log_driver\","
+        echo "  \"log-opts\": $log_opts_json,"
+        echo "  \"storage-driver\": \"overlay2\","
+        echo "  \"insecure-registries\": $insecure_registries_json,"
+        echo "  \"registry-mirrors\": $registry_mirrors_json,"
+        echo "  \"live-restore\": $live_restore,"
+        echo "  \"userland-proxy\": false,"
+        echo "  \"exec-opts\": [\"native.cgroupdriver=$cgroup_driver\"]"
+        echo "}"
+    } > "$candidate"
+    chmod 600 "$candidate"
+
+    if ! dockerd --validate --config-file "$candidate" >/dev/null 2>&1; then
+        log_error "Generated Docker configuration failed dockerd validation"
+        rm -f "$candidate"
+        return 1
+    fi
+    mv -f "$candidate" "$config_path"
 }
 
 docker_main() {
@@ -35,22 +144,6 @@ docker_main() {
         if [ "${FORCE:-false}" != "true" ] && [ "${FORCE_MODE:-false}" != "true" ]; then
             if [ "${NON_INTERACTIVE:-false}" = "true" ]; then
                 log_info "Docker already installed and running - skipping reinstall"
-                # Still ensure daemon.json baseline exists without reinstalling packages.
-                if [ ! -f /etc/docker/daemon.json ]; then
-                    mkdir -p /etc/docker
-                    cat > /etc/docker/daemon.json << 'EOFDOCKER'
-{
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  },
-  "live-restore": true,
-  "userland-proxy": false
-}
-EOFDOCKER
-                    systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
-                fi
                 state_mark "docker" "completed"
                 return 0
             else
@@ -96,9 +189,9 @@ EOFDOCKER
             install_method="pacman"
             ;;
         *)
-            log_warn "Unsupported distribution for automated Docker install: $(detect_os_id)"
-            log_info "Will attempt to use convenience script (less secure)"
-            install_method="script"
+            log_error "Unsupported distribution for production Docker installation: $(detect_os_id)"
+            log_error "Install Docker from a verified distribution repository, then rerun this module to configure it"
+            return 1
             ;;
     esac
     
@@ -185,29 +278,9 @@ EOFDOCKER
             changes_made=true
             ;;
             
-        script)
-            log_warn "Using Docker convenience script (less secure - not recommended for production)"
-            log_warn "For production, consider manual repository installation"
-            
-            if [ "${NON_INTERACTIVE:-false}" = "false" ]; then
-                printf '\033[1;33m'
-                read -r -p "Continue with convenience script installation? [y/N] " choice
-                printf '\033[0m\n'
-                case "$choice" in
-                    y|Y|yes|Yes) ;;
-                    *) 
-                        log_info "Docker installation cancelled"
-                        return 0
-                        ;;
-                esac
-            fi
-            
-            # Download and run the convenience script
-            curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-            sh /tmp/get-docker.sh
-            rm -f /tmp/get-docker.sh
-            
-            changes_made=true
+        *)
+            log_error "Unsupported Docker installation method: $install_method"
+            return 1
             ;;
     esac
     
@@ -290,26 +363,34 @@ EOFDOCKER
         esac
     fi
     
-    # Create daemon.json
-    {
-        echo "{"
-        echo "  \"log-driver\": \"$log_driver\","
-        if [ "$log_driver" != "none" ] && [ -n "$log_opts" ]; then
-            echo "  \"log-opts\": { $log_opts },"
-        fi
-        echo "  \"storage-driver\": \"overlay2\","
-        echo "  \"insecure-registries\": [ $(echo "$insecure_registries" | tr ',' ',' | sed 's/,$//' | sed 's/^,$//' | awk -v RS='[^,]+' '{gsub(/^[ \t]+|[ \t]+$/, ""); printf "%s\"%s\"", sep, $0; sep=", "} END {if (sep=="") print ""; else print substr(sep, 1, length(sep)-2)}') ],"
-        echo "  \"registry-mirrors\": [ $(echo "$registry_mirrors" | tr ',' ',' | sed 's/,$//' | sed 's/^,$//' | awk -v RS='[^,]+' '{gsub(/^[ \t]+|[ \t]+$/, ""); printf "%s\"%s\"", sep, $0; sep=", "} END {if (sep=="") print ""; else print substr(sep, 1, length(sep)-2)}') ],"
-        echo "  \"live-restore\": $(if [ "$live_restore" = "true" ]; then echo "true"; else echo "false"; fi),"
-        echo "  \"userland-proxy\": false,"
-        echo "  \"no-new-privileges\": true,"
-        echo "  \"cgroup-driver\": \"$cgroup_driver\""
-        echo "}"
-    } > /etc/docker/daemon.json
+    local daemon_config="/etc/docker/daemon.json"
+    local daemon_config_backup=""
+    local daemon_config_existed=false
+    if [ -f "$daemon_config" ]; then
+        daemon_config_existed=true
+        daemon_config_backup="$(mktemp)"
+        cp -p "$daemon_config" "$daemon_config_backup"
+    fi
+    if ! docker_write_daemon_config "$daemon_config" "$cgroup_driver" "$log_driver" "$log_opts" \
+        "$insecure_registries" "$registry_mirrors" "$live_restore"; then
+        rm -f "$daemon_config_backup"
+        return 1
+    fi
     
     # Restart Docker to apply configuration
     log_info "Restarting Docker daemon to apply configuration..."
-    systemctl reload-or-restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+    if ! systemctl reload-or-restart docker 2>/dev/null && ! service docker restart 2>/dev/null; then
+        log_error "Docker restart failed after configuration update"
+        if [ "$daemon_config_existed" = "true" ]; then
+            cp -p "$daemon_config_backup" "$daemon_config"
+        else
+            rm -f "$daemon_config"
+        fi
+        systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+        rm -f "$daemon_config_backup"
+        return 1
+    fi
+    rm -f "$daemon_config_backup"
     
     # Verify configuration is applied
     sleep 2
@@ -318,8 +399,9 @@ EOFDOCKER
         changes_made=true
         audit "DOCKER_CONFIGURED" "version=$(docker --version | cut -d' ' -f3) cgroup_driver=$cgroup_driver log_driver=$log_driver"
     else
-        log_warn "Docker daemon restart issue - checking status"
+        log_error "Docker daemon did not become ready after configuration update"
         systemctl status docker 2>/dev/null || service docker status 2>/dev/null || true
+        return 1
     fi
     
     # Add current user to docker group (if not root and user specified)
@@ -353,7 +435,7 @@ EOFDOCKER
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "docker.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

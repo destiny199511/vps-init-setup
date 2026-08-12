@@ -15,6 +15,11 @@ PASSWORD_AUTH 'Allow password authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTHENTICATION 'Allow public key authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTH 'Whether SSH public key auth was chosen in wizard (yes/no)'
 SSH_PUBKEY 'Optional SSH public key content'
+USER_FULLNAME 'Full name for the non-root user'
+USER_SHELL 'Login shell for the non-root user'
+CREATE_HOME 'Whether to create the user home directory (true/false)'
+ADD_TO_SUDO 'Whether to grant sudo access (true/false)'
+SETUP_SSH 'Whether to configure user SSH access (true/false)'
 SSH_PERMIT_EMPTY_PASSWORDS 'Allow empty passwords via SSH (yes/no)'
 SSH_MAX_AUTH_TRIES 'Maximum authentication attempts'
 SSH_MAX_SESSIONS 'Maximum multiplexed sessions'
@@ -22,15 +27,34 @@ SSH_CLIENT_ALIVE_INTERVAL 'Client alive interval (seconds)'
 SSH_CLIENT_ALIVE_COUNT_MAX 'Client alive count max'
 SSH_LOGIN_GRACE_TIME 'Login grace time (seconds)'
 ALLOWED_PORTS 'Comma-separated list of additional ports to allow'
+HTTP_PORT 'HTTP port number'
+HTTPS_PORT 'HTTPS port number'
 INSTALL_DOCKER 'Whether to install Docker (true/false)'
 INSTALL_NPM 'Whether to install NPM (Node Package Manager) (true/false)'
+DOCKER_INSTALL_METHOD 'Docker package-manager installation method'
+DOCKER_CGROUP_DRIVER 'Docker cgroup driver'
+DOCKER_LOG_DRIVER 'Docker log driver'
+DOCKER_LOG_OPTS 'Docker log options'
+DOCKER_INSECURE_REGISTRIES 'Comma-separated Docker insecure registries'
+DOCKER_REGISTRY_MIRRORS 'Comma-separated Docker registry mirrors'
+DOCKER_LIVE_RESTORE 'Whether to enable Docker live restore (true/false)'
 DOMAIN 'Domain name for reverse proxy'
 INSTALL_NODE_EXPORTER 'Whether to install node exporter (true/false)'
 INSTALL_FAIL2BAN 'Whether to install Fail2ban (true/false)'
 INSTALL_AUDITD 'Whether to install auditd (true/false)'
 ENABLE_SELINUX_CHECK 'Whether to check SELinux/AppArmor (true/false)'
 ENABLE_BACKUP 'Whether to enable backup system (true/false)'
+BACKUP_SCHEDULE 'Five-field cron schedule for backups'
+BACKUP_DIRECTORIES 'Space-separated absolute backup source directories'
+BACKUP_RETENTION 'Backup retention in days'
+BACKUP_COMPRESSION 'Backup compression (gzip/bzip2/xz/none)'
+BACKUP_ENCRYPTION 'Whether to encrypt backups (true/false)'
+BACKUP_GPG_RECIPIENT 'GPG recipient for encrypted backups'
+BACKUP_DESTINATION 'Absolute local backup destination directory'
+BACKUP_RUN_INITIAL 'Whether to run an initial backup (true/false)'
 ENABLE_MONITORING 'Whether to enable monitoring tools (true/false)'
+MONITORING_NETDATA_ENABLED 'Whether to install Netdata (true/false)'
+MONITORING_PROMETHEUS_NODE_ENABLED 'Whether to install Node Exporter (true/false)'
 BACKEND_STORAGE 'Backup backend storage (e.g., rclone://remote/backup)'
 ENABLE_SWAP 'Whether to create swap (true/false)'
 SWAP_SIZE 'Swap size (e.g., 2G, 4G, 8G)'
@@ -40,8 +64,10 @@ VFS_CACHE_PRESSURE 'VM vfs_cache_pressure value (0-1000)'
 REMOVE_SNAP 'Whether to remove snap (true/false)'
 CLEAN_PKG_CACHE 'Whether to clean package cache (true/false)'
 CLEAN_JOURNAL 'Whether to clean journal logs (true/false)'
+JOURNAL_MAX_SIZE 'Maximum journal storage size (e.g., 200M)'
 DISABLE_SERVICES 'Whether to disable unused services (true/false)'
 CLEAN_TEMP 'Whether to clean temporary files (true/false)'
+OPTIMIZE_FSTAB 'Whether to review filesystem optimizations (true/false)'
 "
 
 # Get list of configuration variable names
@@ -52,16 +78,52 @@ get_config_var_names() {
 # Load configuration from file and environment variables
 load_config() {
     local config_file="$1"
+    local config_var_names config_owner config_mode key value line
+    local loaded_count=0
     HOSTNAME_FROM_CONFIG="${HOSTNAME_FROM_CONFIG:-false}"
 
-    # Load from file if it exists
+    # Configuration is data, not shell code. Do not source this file: it can be
+    # preserved across root-run updates and must never execute commands.
     if [ -f "$config_file" ]; then
-        if grep -qE '^[[:space:]]*HOSTNAME=' "$config_file" 2>/dev/null; then
-            HOSTNAME_FROM_CONFIG=true
+        if [ "${EUID:-$(id -u)}" -eq 0 ]; then
+            config_owner="$(stat -c '%u' "$config_file" 2>/dev/null || true)"
+            config_mode="$(stat -c '%a' "$config_file" 2>/dev/null || true)"
+            if [ "$config_owner" != "0" ] || [ -z "$config_mode" ] || (( (8#$config_mode) & 022 )); then
+                log_error "Refusing unsafe configuration file ownership or permissions: $config_file"
+                return 1
+            fi
         fi
-        # shellcheck disable=SC1090
-        . "$config_file"
-        log_info "Loaded configuration from $config_file"
+        config_var_names=" $(get_config_var_names | tr '\n' ' ') "
+        while IFS= read -r line || [ -n "$line" ]; do
+            line="${line%$'\r'}"
+            case "$line" in
+                ''|'#'*) continue ;;
+            esac
+            if [[ ! "$line" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]]; then
+                log_warn "Ignoring malformed configuration line in $config_file"
+                continue
+            fi
+            key="${BASH_REMATCH[1]}"
+            value="${BASH_REMATCH[2]}"
+            # Support the legacy %q form used by releases before v2.1 for
+            # space-containing data such as SSH public keys. This is decoding,
+            # never evaluation.
+            value="${value//\\ / }"
+            value="${value//\\\\/\\}"
+            case "$config_var_names" in
+                *" $key "*) ;;
+                *)
+                    log_warn "Ignoring unsupported configuration key: $key"
+                    continue
+                    ;;
+            esac
+            export "$key=$value"
+            loaded_count=$((loaded_count + 1))
+            if [ "$key" = "HOSTNAME" ]; then
+                HOSTNAME_FROM_CONFIG=true
+            fi
+        done < "$config_file"
+        log_info "Loaded $loaded_count configuration value(s) from $config_file"
     fi
 
     # Override with environment variables (VPS_SETUP_ prefix)
@@ -81,6 +143,7 @@ load_config() {
 # Save current configuration to file
 save_config() {
     local config_file="$1"
+    local config_dir config_tmp
     shift
     
     # If no variables specified, save all configured variables
@@ -88,16 +151,25 @@ save_config() {
         set -- $(get_config_var_names)
     fi
     
+    config_dir="$(dirname "$config_file")"
+    mkdir -p "$config_dir"
+    if [ -L "$config_file" ]; then
+        log_error "Refusing to write configuration through symbolic link: $config_file"
+        return 1
+    fi
+    config_tmp="$(mktemp "$config_dir/.vps_config.XXXXXX")"
     {
         printf '# VPS Auto-Setup Configuration\n'
         printf '# Generated: %s\n' "$(date)"
         printf '# Do not edit manually unless you know what you are doing\n\n'
         for var in "$@"; do
             if [ -n "${!var:-}" ]; then
-                printf '%s=%q\n' "$var" "${!var}"
+                printf '%s=%s\n' "$var" "${!var}"
             fi
         done
-    } > "$config_file"
+    } > "$config_tmp"
+    chmod 600 "$config_tmp"
+    mv -f "$config_tmp" "$config_file"
     
     log_info "Configuration saved to $config_file"
 }
@@ -226,11 +298,21 @@ apply_config_defaults() {
     : "${INSTALL_DOCKER:=true}"
     : "${INSTALL_NPM:=false}"
     : "${DOMAIN:=example.com}"
+    : "${HTTP_PORT:=80}"
+    : "${HTTPS_PORT:=443}"
     : "${INSTALL_NODE_EXPORTER:=false}"
     : "${INSTALL_FAIL2BAN:=true}"
     : "${INSTALL_AUDITD:=false}"
     : "${ENABLE_SELINUX_CHECK:=true}"
     : "${ENABLE_BACKUP:=false}"
+    : "${BACKUP_SCHEDULE:=0 2 * * *}"
+    : "${BACKUP_DIRECTORIES:=/etc /var/www /home}"
+    : "${BACKUP_RETENTION:=30}"
+    : "${BACKUP_COMPRESSION:=gzip}"
+    : "${BACKUP_ENCRYPTION:=false}"
+    : "${BACKUP_GPG_RECIPIENT:=}"
+    : "${BACKUP_DESTINATION:=/var/backups/vps-init-setup}"
+    : "${BACKUP_RUN_INITIAL:=false}"
     : "${ENABLE_MONITORING:=false}"
     : "${BACKEND_STORAGE:=rclone://remote/backup}"
     : "${SSH_PUBKEY_AUTH:=yes}"
@@ -243,6 +325,8 @@ apply_config_defaults() {
     : "${REMOVE_SNAP:=false}"
     : "${CLEAN_PKG_CACHE:=true}"
     : "${CLEAN_JOURNAL:=true}"
+    : "${JOURNAL_MAX_SIZE:=200M}"
     : "${DISABLE_SERVICES:=false}"
     : "${CLEAN_TEMP:=true}"
+    : "${OPTIMIZE_FSTAB:=true}"
 }

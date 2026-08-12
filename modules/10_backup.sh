@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Backup Module - Configure automated backup system
 #
@@ -19,7 +19,7 @@ backup_main() {
     local backup_compression backup_encryption backup_destination
     
     if [ "${NON_INTERACTIVE:-false}" = "true" ]; then
-        backup_enabled="${BACKUP_ENABLED:-false}"
+        backup_enabled="${BACKUP_ENABLED:-${ENABLE_BACKUP:-false}}"
         backup_schedule="${BACKUP_SCHEDULE:-0 2 * * *}"  # Daily at 2 AM
         backup_directories="${BACKUP_DIRECTORIES:-/etc /var/www /home}"
         backup_retention="${BACKUP_RETENTION:-30}"  # Days
@@ -127,18 +127,47 @@ backup_main() {
         log_error "No backup directories specified"
         return 1
     fi
-    
-    # Validate cron syntax (basic)
-    if ! echo "$backup_schedule" | grep -qE '^(\*|[0-9]+(\/[0-9]+)?\s+){4}\*|[0-9]+(\/[0-9]+)?$'; then
-        log_warn "Cron schedule format may be incorrect: $backup_schedule"
-        if [ "${FORCE:-false}" != "true" ] && [ "${SKIP_CONFIRMATIONS:-false}" = "false" ]; then
-            read -r -p "Continue anyway? [y/N] " choice
-            case "$choice" in
-                y|Y|yes|Yes) ;;
-                *) return 1 ;;
-            esac
+    local -a cron_fields
+    IFS=' ' read -r -a cron_fields <<< "$backup_schedule"
+    if [ "${#cron_fields[@]}" -ne 5 ]; then
+        log_error "Backup schedule must contain exactly five cron fields"
+        return 1
+    fi
+    local cron_field
+    for cron_field in "${cron_fields[@]}"; do
+        if [[ ! "$cron_field" =~ ^[0-9*/,-]+$ ]]; then
+            log_error "Backup schedule contains unsupported cron syntax: $cron_field"
+            return 1
+        fi
+    done
+    if [[ ! "$backup_destination" =~ ^/[A-Za-z0-9._/-]+$ ]] || [ "$backup_destination" = "/" ]; then
+        log_error "Backup destination must be a non-root absolute path with safe characters"
+        return 1
+    fi
+    case "$backup_compression" in
+        gzip|bzip2|xz|none) ;;
+        *)
+            log_error "Unsupported backup compression: $backup_compression"
+            return 1
+            ;;
+    esac
+    if [[ ! "$backup_retention" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "Backup retention must be a positive number of days"
+        return 1
+    fi
+    if [ "$backup_encryption" = "true" ]; then
+        if [[ ! "${BACKUP_GPG_RECIPIENT:-}" =~ ^[A-Za-z0-9@._+-]+$ ]]; then
+            log_error "BACKUP_GPG_RECIPIENT is required and must use safe characters when encryption is enabled"
+            return 1
         fi
     fi
+    local backup_source
+    for backup_source in $backup_directories; do
+        if [[ ! "$backup_source" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            log_error "Backup source must be an absolute path with safe characters: $backup_source"
+            return 1
+        fi
+    done
     
     # Create backup directory
     if [ ! -d "$backup_destination" ]; then
@@ -189,6 +218,7 @@ backup_main() {
         echo "RETENTION_DAYS=$backup_retention"
         echo "COMPRESSION=\"$backup_compression\""
         echo "ENCRYPTION=\"$backup_encryption\""
+        echo "GPG_RECIPIENT=\"${BACKUP_GPG_RECIPIENT:-}\""
         echo ""
         echo "# Colors for output"
         echo "RED='\\033[0;31m'"
@@ -208,12 +238,14 @@ backup_main() {
         echo "create_backup() {"
         echo "    local timestamp=\"\$(date +%Y%m%d_%H%M%S)\""
         echo "    local hostname=\"\$(hostname)\""
-        echo "    local backup_file=\"${backup_dir}/backup_\${hostname}_\${timestamp}.tar\""
+        echo "    local backup_file=\"\${BACKUP_DIR}/backup_\${hostname}_\${timestamp}.tar\""
         echo ""
         echo "    log \"Starting backup of:\${SOURCES}\""
         echo ""
         echo "    # Create tar archive"
-        echo "    if ! tar -cf \"\$backup_file\" \$SOURCES 2>/dev/null; then"
+        echo "    local -a sources"
+        echo "    read -r -a sources <<< \"\$SOURCES\""
+        echo "    if ! tar -cf \"\$backup_file\" -- \"\${sources[@]}\" 2>/dev/null; then"
         echo "        error_exit \"Failed to create tar archive\""
         echo "    fi"
         echo ""
@@ -247,7 +279,7 @@ backup_main() {
         echo ""
         echo "    # Encrypt if requested"
         echo "    if [ \"\$ENCRYPTION\" = \"true\" ]; then"
-        echo "        if ! gpg --encrypt --recipient \"backup-key\" \"\$backup_file\"; then"
+        echo "        if ! gpg --batch --yes --encrypt --recipient \"\$GPG_RECIPIENT\" \"\$backup_file\"; then"
         echo "            error_exit \"Failed to encrypt backup\""
         echo "        fi"
         echo "        # Remove unencrypted file"
@@ -284,9 +316,13 @@ backup_main() {
         echo ""
         echo "log \"Backup script completed successfully\""
     } > "$backup_script"
-    
-    chmod +x "$backup_script"
+
     chmod 700 "$backup_script"  # Only root can read/execute
+    if ! bash -n "$backup_script"; then
+        log_error "Generated backup script failed syntax validation"
+        rm -f "$backup_script"
+        return 1
+    fi
     
     # Create cron job
     local cron_file="/etc/cron.d/backup-system"
@@ -334,7 +370,7 @@ backup_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "backup.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

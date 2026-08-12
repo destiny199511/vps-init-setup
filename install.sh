@@ -9,18 +9,22 @@ Options:
   --repo-url URL      GitHub repository URL (default: ${REPO_URL})
   --ref REF           GitHub release tag or branch to install (default: ${REF})
     --install-dir DIR   Target directory (default: ${INSTALL_DIR})
-    --update-only       Update files without starting the setup wizard
+    --sha256 SHA256      Expected archive SHA-256 (recommended for production)
+    --update-only        Update files without starting the setup wizard
   --help              Show this help
 
 Environment variables:
   VPS_INIT_SETUP_REPO_URL
   VPS_INIT_SETUP_REF
   VPS_INIT_SETUP_INSTALL_DIR
+    VPS_INIT_SETUP_SHA256
 EOF
 }
 
+INSTALL_MARKER=".vps-init-setup-managed"
+
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
-if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+if [ -n "$SCRIPT_SOURCE" ] && [ "$SCRIPT_SOURCE" != "bash" ] && [ "$SCRIPT_SOURCE" != "-" ] && [ -f "$SCRIPT_SOURCE" ]; then
     SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" >/dev/null 2>&1 && pwd)"
 else
     SCRIPT_DIR=""
@@ -28,6 +32,7 @@ fi
 REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
 INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
 REF="${VPS_INIT_SETUP_REF:-$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "latest") }"
+EXPECTED_SHA256="${VPS_INIT_SETUP_SHA256:-}"
 RUN_SETUP=true
 
 while [[ $# -gt 0 ]]; do
@@ -42,6 +47,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --install-dir)
             INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --sha256)
+            EXPECTED_SHA256="$2"
             shift 2
             ;;
         --update-only)
@@ -62,6 +71,11 @@ done
 
 REF="${REF# }"
 REF="${REF% }"
+
+if [ -n "$EXPECTED_SHA256" ] && [[ ! "$EXPECTED_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]; then
+    echo "Expected SHA-256 must contain exactly 64 hexadecimal characters."
+    exit 1
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "This installer must be run as root or with sudo."
@@ -99,6 +113,88 @@ normalize_repo() {
     repo="${repo#http://github.com/}"
     repo="${repo%.git}"
     echo "$repo"
+}
+
+validate_install_dir() {
+    local install_parent install_owner install_mode
+
+    case "$INSTALL_DIR" in
+        /*) ;;
+        *)
+            echo "Install directory must be an absolute path: $INSTALL_DIR"
+            exit 1
+            ;;
+    esac
+    INSTALL_DIR="${INSTALL_DIR%/}"
+    [ -n "$INSTALL_DIR" ] || INSTALL_DIR="/"
+
+    if [[ "$INSTALL_DIR" == *$'\n'* || "$INSTALL_DIR" == *$'\r'* || "$INSTALL_DIR" == *'/./'* || "$INSTALL_DIR" == */. || "$INSTALL_DIR" == *'/../'* || "$INSTALL_DIR" == */.. ]]; then
+        echo "Install directory must not contain relative path components or control characters: $INSTALL_DIR"
+        exit 1
+    fi
+
+    case "$INSTALL_DIR" in
+        /opt/*|/srv/*|/usr/local/src/*) ;;
+        *)
+            echo "Refusing unsafe install directory: $INSTALL_DIR"
+            echo "Choose a dedicated directory below /opt, /srv, or /usr/local/src."
+            exit 1
+            ;;
+    esac
+    if [ -L "$INSTALL_DIR" ]; then
+        echo "Refusing symbolic-link install directory: $INSTALL_DIR"
+        exit 1
+    fi
+    if [ -e "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR" ]; then
+        echo "Install path exists but is not a directory: $INSTALL_DIR"
+        exit 1
+    fi
+
+    install_parent="$(dirname "$INSTALL_DIR")"
+    if [ ! -d "$install_parent" ]; then
+        mkdir -p "$install_parent"
+    fi
+    if [ -L "$install_parent" ]; then
+        echo "Refusing install directory with symbolic-link parent: $install_parent"
+        exit 1
+    fi
+
+    if [ -d "$INSTALL_DIR" ]; then
+        install_owner="$(stat -c '%u' "$INSTALL_DIR" 2>/dev/null || true)"
+        install_mode="$(stat -c '%a' "$INSTALL_DIR" 2>/dev/null || true)"
+        if [ "$install_owner" != "0" ] || [ -z "$install_mode" ] || (( (8#$install_mode) & 022 )); then
+            echo "Install directory must be owned by root and not group/world writable: $INSTALL_DIR"
+            exit 1
+        fi
+
+        if [ -f "$INSTALL_DIR/$INSTALL_MARKER" ]; then
+            return 0
+        fi
+        if [ -f "$INSTALL_DIR/vps_setup.sh" ] && [ -d "$INSTALL_DIR/lib" ] && [ -d "$INSTALL_DIR/modules" ]; then
+            echo "Adopting a secure legacy installation at $INSTALL_DIR"
+            return 0
+        fi
+        if [ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+            echo "Refusing non-empty directory that is not a vps-init-setup installation: $INSTALL_DIR"
+            exit 1
+        fi
+    fi
+}
+
+validate_release_tree() {
+    local release_dir required_file
+
+    release_dir="$1"
+    if find "$release_dir" -xdev -type l -print -quit | grep -q .; then
+        echo "Downloaded release contains symbolic links; refusing to install it."
+        exit 1
+    fi
+    for required_file in vps_setup.sh lib/core.sh lib/common.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
+        if [ ! -f "$release_dir/$required_file" ]; then
+            echo "Downloaded release is incomplete: missing $required_file"
+            exit 1
+        fi
+    done
 }
 
 resolve_release_tag() {
@@ -152,10 +248,41 @@ resolve_download_url() {
     fi
 }
 
+verify_release_checksum() {
+    local archive_file="$1"
+    local archive_url="$2"
+    local checksum_url checksum_file expected_checksum actual_checksum
+
+    if [ -n "$EXPECTED_SHA256" ]; then
+        expected_checksum="$EXPECTED_SHA256"
+    else
+        case "$archive_url" in
+            */archive/refs/heads/*)
+                echo "Warning: installing an unpinned development branch archive. Use a release tag and --sha256 for production."
+                return 0
+                ;;
+        esac
+        checksum_url="${archive_url}.sha256"
+        checksum_file="${archive_file}.sha256"
+        if ! curl -fsSL "$checksum_url" -o "$checksum_file"; then
+            echo "Release checksum is unavailable: $checksum_url"
+            exit 1
+        fi
+        expected_checksum="$(awk 'NF {print $1; exit}' "$checksum_file")"
+    fi
+    actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
+    if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
+        echo "Release checksum verification failed."
+        exit 1
+    fi
+    echo "Release checksum verified."
+}
+
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/vps_setup.sh" ]; then
     echo "Using local repository at $SCRIPT_DIR"
     INSTALL_DIR="$SCRIPT_DIR"
 else
+    validate_install_dir
     repo_path="$(normalize_repo "$REPO_URL")"
     release_tag="$(resolve_release_tag "$repo_path" "$REF")"
     archive_url="$(resolve_download_url "$repo_path" "$release_tag")"
@@ -165,6 +292,11 @@ else
 
     echo "Installing release ${release_tag} from ${archive_url}"
     curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz"
+    verify_release_checksum "$tmp_dir/source.tar.gz" "$archive_url"
+    if tar -tzf "$tmp_dir/source.tar.gz" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+        echo "Downloaded release contains unsafe archive paths; refusing to extract it."
+        exit 1
+    fi
     tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir"
 
     extracted_dir="$(find "$tmp_dir" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
@@ -173,28 +305,18 @@ else
         exit 1
     fi
 
-    preserved_dir="$(mktemp -d)"
-    for data_dir in config logs backups; do
-        if [ -d "$INSTALL_DIR/$data_dir" ]; then
-            mkdir -p "$preserved_dir/$data_dir"
-            cp -a "$INSTALL_DIR/$data_dir/." "$preserved_dir/$data_dir/"
-        fi
-    done
+    validate_release_tree "$extracted_dir"
+
+    # Runtime state belongs to the target host, never to a source archive.
+    rm -rf "$extracted_dir/config" "$extracted_dir/logs" "$extracted_dir/backups"
 
     # Keep INSTALL_DIR itself so callers currently in it retain a valid cwd.
     mkdir -p "$INSTALL_DIR"
     find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-        ! -name config ! -name logs ! -name backups \
+        ! -name config ! -name logs ! -name backups ! -name "$INSTALL_MARKER" \
         -exec rm -rf -- {} +
-    cp -a "$extracted_dir/." "$INSTALL_DIR/"
-
-    for data_dir in config logs backups; do
-        if [ -d "$preserved_dir/$data_dir" ]; then
-            mkdir -p "$INSTALL_DIR/$data_dir"
-            cp -a "$preserved_dir/$data_dir/." "$INSTALL_DIR/$data_dir/"
-        fi
-    done
-    rm -rf "$preserved_dir"
+    cp -a --no-preserve=ownership "$extracted_dir/." "$INSTALL_DIR/"
+    chown root:root "$INSTALL_DIR"
 fi
 
 cd "$INSTALL_DIR"
@@ -206,6 +328,11 @@ for required_file in vps_setup.sh lib/core.sh lib/common.sh modules/{00_prefligh
         exit 1
     fi
 done
+
+if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
+    printf 'managed-by=vps-init-setup\n' > "$INSTALL_DIR/$INSTALL_MARKER"
+    chmod 600 "$INSTALL_DIR/$INSTALL_MARKER"
+fi
 
 if [ "$RUN_SETUP" = "false" ]; then
     echo "Update complete. Setup wizard was not started."

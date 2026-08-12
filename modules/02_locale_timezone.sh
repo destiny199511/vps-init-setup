@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Locale and Timezone Module - Configure system locale and timezone
 #
@@ -289,7 +289,7 @@ locale_timezone_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "locale_timezone.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

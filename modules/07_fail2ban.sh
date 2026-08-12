@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Fail2ban Module - Install and configure Fail2ban for intrusion prevention
 #
@@ -364,7 +364,7 @@ fail2ban_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "fail2ban.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

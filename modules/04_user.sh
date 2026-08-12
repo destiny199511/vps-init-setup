@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # User Module - Create non-root user with SSH access and optional sudo
 #
@@ -278,7 +278,7 @@ user_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "user.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

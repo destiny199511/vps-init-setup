@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Network Module - Optimize kernel network parameters (BBR, TCP tuning)
 #
@@ -86,7 +86,7 @@ network_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "network.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

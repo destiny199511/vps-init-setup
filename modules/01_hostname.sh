@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Hostname Module - Configure system hostname and /etc/hosts
 #
@@ -134,7 +134,7 @@ hostname_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "hostname.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

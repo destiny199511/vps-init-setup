@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Security Module - Install and configure security scanning/auditing tools
 #
@@ -269,7 +269,7 @@ EOF
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "security.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

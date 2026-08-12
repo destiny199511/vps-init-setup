@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # DNS Module - Configure DNS resolution (systemd-resolved or traditional)
 #
@@ -18,13 +18,11 @@ dns_main() {
     local dns_mode resolv_conf
     resolv_conf="/etc/resolv.conf"
     
-    # Check if systemd-resolved is active
+    # Configure systemd-resolved only when it is actually serving DNS. A stale
+    # runtime directory is not proof that the service can own resolv.conf.
     if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
         dns_mode="systemd-resolved"
         log_info "systemd-resolved is active"
-    elif [ -d /run/systemd/resolve ]; then
-        dns_mode="systemd-resolved-stub"
-        log_info "systemd-resolved available but not active"
     else
         dns_mode="traditional"
         log_info "Using traditional DNS configuration"
@@ -79,7 +77,7 @@ dns_main() {
     fi
     
     # Skip if already configured correctly
-    if [ "$dns_mode" = "systemd-resolved" ] || [ "$dns_mode" = "systemd-resolved-stub" ]; then
+    if [ "$dns_mode" = "systemd-resolved" ]; then
         # Check current systemd-resolved settings
         if command -v resolvectl >/dev/null 2>&1; then
             current_dns=$(resolvectl dns 2>/dev/null | grep 'Current DNS Server:' | awk '{print $4}' | head -1)
@@ -108,15 +106,11 @@ dns_main() {
     local changes_made=false
     
     # Configure based on mode
-    if [ "$dns_mode" = "systemd-resolved" ] || [ "$dns_mode" = "systemd-resolved-stub" ]; then
+    if [ "$dns_mode" = "systemd-resolved" ]; then
         log_info "Configuring systemd-resolved..."
-        
-        # Backup and update resolved.conf
-        if [ -f /etc/systemd/resolved.conf ]; then
-            cp -p /etc/systemd/resolved.conf /etc/systemd/resolved.conf.backup.$(date +%s)
-        fi
-        
-        # Create or update resolved.conf
+
+        local resolved_candidate
+        resolved_candidate=$(mktemp)
         {
             echo "[Resolve]"
             echo "DNS=$primary_dns $secondary_dns"
@@ -128,13 +122,22 @@ dns_main() {
             echo "# Cache=yes"
             echo "# DNSStubListener=yes"
             echo "# ReadEtcHosts=yes"
-        } > /etc/systemd/resolved.conf
-        
-        # Restart service if active
-        if systemctl is-active --quiet systemd-resolved; then
-            systemctl restart systemd-resolved
-            sleep 2
+        } > "$resolved_candidate"
+
+        install -m 644 "$resolved_candidate" /etc/systemd/resolved.conf
+        rm -f "$resolved_candidate"
+
+        if ! systemctl restart systemd-resolved; then
+            log_error "Failed to restart systemd-resolved; restoring previous configuration"
+            if [ -n "$resolved_conf_backup" ] && [ -f "$resolved_conf_backup" ]; then
+                cp -p "$resolved_conf_backup" /etc/systemd/resolved.conf
+            else
+                rm -f /etc/systemd/resolved.conf
+            fi
+            systemctl restart systemd-resolved 2>/dev/null || true
+            return 1
         fi
+        sleep 2
         
         # Verify configuration
         if command -v resolvectl >/dev/null 2>&1; then
@@ -145,16 +148,34 @@ dns_main() {
                 changes_made=true
                 audit "DNS_CONFIGURED" "mode=systemd-resolved primary=$primary_dns secondary=$secondary_dns"
             else
-                log_warn "Could not verify systemd-resolved DNS configuration"
+                log_error "Could not verify systemd-resolved DNS configuration; restoring previous configuration"
+                if [ -n "$resolved_conf_backup" ] && [ -f "$resolved_conf_backup" ]; then
+                    cp -p "$resolved_conf_backup" /etc/systemd/resolved.conf
+                else
+                    rm -f /etc/systemd/resolved.conf
+                fi
+                systemctl restart systemd-resolved 2>/dev/null || true
+                return 1
             fi
         else
-            log_warn "resolvectl not available, assuming configuration applied"
-            changes_made=true
+            log_error "resolvectl is required to verify systemd-resolved configuration"
+            if [ -n "$resolved_conf_backup" ] && [ -f "$resolved_conf_backup" ]; then
+                cp -p "$resolved_conf_backup" /etc/systemd/resolved.conf
+            else
+                rm -f /etc/systemd/resolved.conf
+            fi
+            systemctl restart systemd-resolved 2>/dev/null || true
+            return 1
         fi
         
     else
         # Traditional resolv.conf configuration
         log_info "Configuring traditional DNS (/etc/resolv.conf)..."
+        if [ -L "$resolv_conf" ]; then
+            log_error "$resolv_conf is managed through a symbolic link while systemd-resolved is inactive"
+            log_error "Start the owning resolver service or replace the link deliberately before using this module"
+            return 1
+        fi
         
         # Create new resolv.conf
         {
@@ -178,27 +199,35 @@ dns_main() {
     
     # Test DNS resolution
     log_info "Testing DNS resolution..."
-    if ping -c 1 -W 3 one.one.one.one >/dev/null 2>&1 || \
-       ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1 || \
-       host google.com >/dev/null 2>&1; then
+    if getent ahostsv4 one.one.one.one >/dev/null 2>&1 || \
+       getent ahostsv6 one.one.one.one >/dev/null 2>&1; then
         log_info "DNS resolution test successful"
     else
-        log_warn "DNS resolution test failed - check network connectivity"
-        # Don't fail the entire module for this
+        log_error "DNS resolution test failed; restoring the previous configuration"
+        if [ "$dns_mode" = "systemd-resolved" ]; then
+            if [ -n "$resolved_conf_backup" ] && [ -f "$resolved_conf_backup" ]; then
+                cp -p "$resolved_conf_backup" /etc/systemd/resolved.conf
+            else
+                rm -f /etc/systemd/resolved.conf
+            fi
+            systemctl restart systemd-resolved 2>/dev/null || true
+        elif [ -n "$resolv_backup" ] && [ -f "$resolv_backup" ]; then
+            cp -p "$resolv_backup" "$resolv_conf"
+        else
+            rm -f "$resolv_conf"
+        fi
+        return 1
     fi
     
     # Mark completion
-    if [ "$changes_made" = "true" ]; then
-        state_mark "dns" "completed"
-    else
-        state_mark "dns" "completed"  # Still mark as completed if no changes needed
-    fi
+    [ "$changes_made" = "true" ] || log_info "DNS configuration already matched the requested state"
+    state_mark "dns" "completed"
     
     log_info "DNS configuration completed"
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "dns.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

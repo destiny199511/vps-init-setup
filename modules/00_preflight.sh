@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Preflight Module - System and Dependency Checks
 # Validates system compatibility and prepares for setup
@@ -119,7 +119,7 @@ preflight_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "preflight.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

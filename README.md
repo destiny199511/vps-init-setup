@@ -1,8 +1,8 @@
 # VPS一键装机 — 生产级通用版
 
-[![ShellCheck](https://img.shields.io/badge/shellcheck-passing-brightgreen)]()
+[![ShellCheck](https://img.shields.io/badge/shellcheck-validated-brightgreen)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
-[![Shell](https://img.shields.io/badge/shell-bash%20%2F%20sh-grey)]()
+[![Shell](https://img.shields.io/badge/shell-bash-grey)]()
 
 VPS 一键装机是一个面向 Linux VPS 的自动化初始化工具，旨在帮助用户在新的服务器上快速完成基础环境配置、安全加固、服务安装和日常运维准备。
 
@@ -20,16 +20,25 @@ VPS 一键装机是一个面向 Linux VPS 的自动化初始化工具，旨在�
 
 ### 1. 安装
 
-安装脚本会优先尝试从发布资源获取；若资源不可用，则自动回退到源码包。
+生产环境请使用不可变的发布标签。标签安装会在解压前下载并校验发布归档的 SHA-256；校验清单缺失或不匹配时安装会中止，不会覆盖现有安装。最高保障方式是在受信任渠道取得发布校验值后，通过 `--sha256` 固定它。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+  | sudo bash -s -- --ref v1.0.0
 ```
 
-如需安装指定版本，可以显式指定版本标签：
+带外校验示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash -s -- --ref v1.0.0
+curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+  | sudo bash -s -- --ref v1.0.0 --sha256 <release-archive-sha256>
+```
+
+`main` 是开发通道，会显示未校验警告；仅应在测试环境使用：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+  | sudo bash -s -- --ref main
 ```
 
 
@@ -84,9 +93,10 @@ sudo ./vps_setup.sh
 
 ### 无人值守安装
 
-如果已经准备好配置，可以直接跳过交互步骤：
+无人值守模式应先准备受 root 保护的配置文件。配置文件是严格的 `KEY=VALUE` 数据文件，不会也不能执行 shell 命令；请以 [examples/example_user_config.conf](examples/example_user_config.conf) 为起点。若关闭密码认证，必须提供有效的 `SSH_PUBKEY`，否则在写入 SSH 配置前中止。
 
 ```bash
+sudo install -m 600 examples/example_user_config.conf config/vps_config.conf
 sudo ./vps_setup.sh -n
 ```
 
@@ -99,18 +109,22 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
   | sudo bash -s -- --ref main --install-dir /opt/vps-init-setup --update-only
 ```
 
-更新后再强制重跑 SSH、Firewall 和 Fail2ban：
+  安装目录必须是 root 所有且不可被组或其他用户写入的专用目录，且仅允许位于 `/opt`、`/srv` 或 `/usr/local/src`。更新会保留目标主机的 `config/`、`logs/`、`backups/`，不会覆盖它们。
+
+  更新后，先在已有 SSH 会话保持连接的情况下验证当前状态，再按需重跑访问控制模块：
 
 ```bash
 cd /opt/vps-init-setup
 sudo ./vps_setup.sh -n -a -f --modules 05_ssh,06_firewall,07_fail2ban
 ```
 
-如果目录本身是通过 `git clone` 创建的，则可以继续使用 `git pull --ff-only origin main`。
+不要对压缩包安装目录使用 `git pull`。如需使用 Git 工作流，请在专用开发目录中执行，并在生产环境通过已发布的标签更新。
 
 ### 注意事项
 
 - 脚本会修改系统配置，包括 SSH、用户、DNS、防火墙和服务安装
+- 运行 SSH、防火墙或 Fail2ban 前，请保持一个已验证的 SSH 会话；脚本会拒绝在目标用户没有公钥或密码认证凭据时修改访问控制
+- 检测到非本工具托管的 nftables 规则时，防火墙模块会拒绝覆盖它们；请先手动迁移或保持原有防火墙
 - 部分模块会安装较大的软件包，例如 Docker、Fail2ban 和 Netdata
 - 建议在执行前确认服务器资源充足，尤其是磁盘空间和网络状态
 - 如需先查看将要执行的内容，可使用 `-d` 预览模式：
@@ -125,7 +139,7 @@ sudo ./vps_setup.sh -n -d
 |------|------|
 | **安全优先** | 所有变更可逆、可审计，默认最小权限 |
 | **幂等可重入** | 已完成模块自动跳过，安全重跑 |
-| **可回滚** | 配置文件修改前自动备份，支持一键恢复 |
+| **可回滚** | 关键配置修改前自动备份，可按备份登记恢复 |
 | **模块化** | 每个功能独立模块，按数字序号 00-12 顺序执行 |
 | **多发行版** | Ubuntu/Debian/CentOS/Rocky/AlmaLinux 自动适配 |
 | **输入校验** | 主机名、端口、数字等严格校验，防止注入 |
@@ -170,14 +184,14 @@ vps-init-setup/
 | **01_hostname** | 主机名设置 + `/etc/hosts` 更新，自动检测IP，保留原有自定义条目，失败回滚 |
 | **02_locale_timezone** | locale配置（含 zh_CN.UTF-8 支持）、时区设置、chrony/NTP 时间同步 |
 | **03_dns** | systemd-resolved 或传统 `resolv.conf`，多DNS方案，含解析验证 |
-| **04_user** | 非root用户创建、SSH密钥配置（自动生成 ed25519 或手动提供公钥）、sudo 权限 |
+| **04_user** | 非root用户创建、SSH公钥或密码认证配置、sudo 权限；不会在服务器生成或打印私钥 |
 
 ### 安全加固
 
 | 模块 | 功能 |
 |------|------|
 | **05_ssh** | SSH端口修改、迁移期默认保留旧端口、禁止root登录、禁用密码认证、MaxAuthTries、ClientAlive、LoginGraceTime，配置前 `sshd -t` 验证，并适配 `ssh.socket` |
-| **06_firewall** | UFW / FirewallD / iptables / nftables 四选一自动检测，默认 deny incoming，开放 SSH/HTTP/HTTPS，支持额外端口 |
+| **06_firewall** | UFW / FirewallD / iptables 自动配置；nftables 仅管理带专属标记的规则，保护既有 VPN、容器和云管理规则 |
 | **07_fail2ban** | 安装Fail2ban，SSH保护jail，三级封禁策略（含 recidive 1周封禁） |
 
 ### 应用与网络

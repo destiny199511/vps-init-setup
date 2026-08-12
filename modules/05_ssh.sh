@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # SSH Hardening Module - Secure SSH configuration
 #
@@ -493,7 +493,7 @@ ssh_main() {
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "ssh.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 

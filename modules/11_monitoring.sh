@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Monitoring Module - Install and configure system monitoring tools
 #
@@ -96,50 +96,54 @@ monitoring_main() {
     if [ "$netdata_enabled" = "true" ]; then
         log_info "Installing Netdata..."
         if ! command -v netdata >/dev/null 2>&1; then
-            curl -sS https://get.netdata.cloud/kickstart.sh | sh /dev/stdin --stable-channel --disable-telemetry --non-interactive
+            case "$(detect_package_manager)" in
+                apt|deb|dnf|yum|rpm|apk)
+                    install_package netdata
+                    ;;
+                *)
+                    log_error "Netdata must be installed from a signed distribution package repository on this OS"
+                    return 1
+                    ;;
+            esac
         fi
 
-        if command -v netdata >/dev/null 2>&1 || systemctl is-active --quiet netdata; then
+        if ! systemctl enable --now netdata 2>/dev/null && ! service netdata start 2>/dev/null; then
+            log_error "Netdata package installed but its service could not be started"
+            return 1
+        fi
+        if command -v netdata >/dev/null 2>&1 && systemctl is-active --quiet netdata; then
             log_info "Netdata installed and running"
             changes_made=true
             audit "MONITORING_NETDATA_INSTALLED" "port=19999"
         else
-            log_warn "Netdata installation may have failed"
+            log_error "Netdata is not available after package installation"
+            return 1
         fi
     fi
 
     # Install Prometheus Node Exporter
     if [ "$prometheus_node_enabled" = "true" ]; then
         log_info "Installing Prometheus Node Exporter..."
-        local arch
-        case "$(uname -m)" in
-            x86_64)  arch="amd64" ;;
-            aarch64) arch="arm64" ;;
-            *)       arch="amd64" ;;
+        case "$(detect_package_manager)" in
+            apt|deb)
+                install_package prometheus-node-exporter
+                if ! systemctl enable --now prometheus-node-exporter; then
+                    log_error "Prometheus Node Exporter package installed but its service could not be started"
+                    return 1
+                fi
+                ;;
+            dnf|yum|rpm)
+                install_package node_exporter
+                if ! systemctl enable --now node_exporter; then
+                    log_error "Prometheus Node Exporter package installed but its service could not be started"
+                    return 1
+                fi
+                ;;
+            *)
+                log_error "Node Exporter must be installed from a signed distribution package repository on this OS"
+                return 1
+                ;;
         esac
-        local node_exporter_version="1.7.0"
-        cd /tmp
-        wget -q "https://github.com/prometheus/node_exporter/releases/download/v${node_exporter_version}/node_exporter-${node_exporter_version}.linux-${arch}.tar.gz"
-        tar xzf "node_exporter-${node_exporter_version}.linux-${arch}.tar.gz"
-        cp "node_exporter-${node_exporter_version}.linux-${arch}/node_exporter" /usr/local/bin/
-        rm -rf "node_exporter-${node_exporter_version}.linux-${arch}"*
-
-        cat > /etc/systemd/system/node_exporter.service << 'EOF'
-[Unit]
-Description=Prometheus Node Exporter
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/node_exporter
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-        systemctl daemon-reload
-        systemctl enable --now node_exporter
         changes_made=true
         log_info "Prometheus Node Exporter installed on port 9100"
         audit "MONITORING_PROMETHEUS_NODE_INSTALLED" "port=9100"
@@ -155,7 +159,7 @@ EOF
 }
 
 # Allow sourcing without execution
-if [ "${0##*/}" != "monitoring.sh" ] && [ "${0##*/}" != "bash" ] && [ "${0##*/}" != "sh" ]; then
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
     return 0
 fi
 
