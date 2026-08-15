@@ -302,18 +302,20 @@ firewall_main() {
             # Preserve existing rules and Docker chains; only add missing
             # baseline rules required for this setup.
             iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -I INPUT -i lo -j ACCEPT
-            iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+            iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+                iptables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
                 iptables -I INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
             # Allow incoming SSH, HTTP, HTTPS without flushing active rules.
             for configured_ssh_port in $ssh_ports; do
-                iptables -C INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
-                    iptables -I INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT
+                iptables -C INPUT -p tcp --dport "$configured_ssh_port" -j ACCEPT 2>/dev/null || \
+                    iptables -I INPUT -p tcp --dport "$configured_ssh_port" -j ACCEPT
             done
-            iptables -C INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
-                iptables -I INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT
-            iptables -C INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
-                iptables -I INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT
+            iptables -C INPUT -p tcp --dport "$http_port" -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -p tcp --dport "$http_port" -j ACCEPT
+            iptables -C INPUT -p tcp --dport "$https_port" -j ACCEPT 2>/dev/null || \
+                iptables -I INPUT -p tcp --dport "$https_port" -j ACCEPT
             
             # Allow ping (ICMP echo request)
             iptables -C INPUT -p icmp --icmp-type echo-request -j ACCEPT 2>/dev/null || \
@@ -329,16 +331,18 @@ firewall_main() {
 
             if command -v ip6tables >/dev/null 2>&1; then
                 ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || ip6tables -I INPUT -i lo -j ACCEPT
-                ip6tables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+                ip6tables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+                    ip6tables -C INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+                    ip6tables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
                     ip6tables -I INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
                 for configured_ssh_port in $ssh_ports; do
-                    ip6tables -C INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
-                        ip6tables -I INPUT -p tcp --dport "$configured_ssh_port" -m state --state NEW -j ACCEPT
+                    ip6tables -C INPUT -p tcp --dport "$configured_ssh_port" -j ACCEPT 2>/dev/null || \
+                        ip6tables -I INPUT -p tcp --dport "$configured_ssh_port" -j ACCEPT
                 done
-                ip6tables -C INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
-                    ip6tables -I INPUT -p tcp --dport "$http_port" -m state --state NEW -j ACCEPT
-                ip6tables -C INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT 2>/dev/null || \
-                    ip6tables -I INPUT -p tcp --dport "$https_port" -m state --state NEW -j ACCEPT
+                ip6tables -C INPUT -p tcp --dport "$http_port" -j ACCEPT 2>/dev/null || \
+                    ip6tables -I INPUT -p tcp --dport "$http_port" -j ACCEPT
+                ip6tables -C INPUT -p tcp --dport "$https_port" -j ACCEPT 2>/dev/null || \
+                    ip6tables -I INPUT -p tcp --dport "$https_port" -j ACCEPT
                 ip6tables -C INPUT -p ipv6-icmp -j ACCEPT 2>/dev/null || \
                     ip6tables -I INPUT -p ipv6-icmp -j ACCEPT
                 ip6tables -P INPUT DROP
@@ -354,8 +358,8 @@ firewall_main() {
                 for port in "${PORTS[@]}"; do
                     port=$(echo "$port" | xargs)
                     if validate_port "$port"; then
-                        iptables -C INPUT -p tcp --dport "$port" -m state --state NEW -j ACCEPT 2>/dev/null || \
-                            iptables -I INPUT -p tcp --dport "$port" -m state --state NEW -j ACCEPT
+                        iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || \
+                            iptables -I INPUT -p tcp --dport "$port" -j ACCEPT
                         log_info "Added additional port: $port/tcp"
                     else
                         log_warn "Skipping invalid port: $port"

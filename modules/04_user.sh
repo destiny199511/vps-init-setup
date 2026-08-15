@@ -188,25 +188,22 @@ user_main() {
                     usermod -aG sudo "$username"
                     log_info "Added user to sudo group"
                     changes_made=true
-                else
-                    # Fallback to adding to sudoers file directly
-                    echo "$username ALL=(ALL:ALL) ALL" > "/etc/sudoers.d/$username"
-                    chmod 440 "/etc/sudoers.d/$username"
-                    log_info "Added user to sudoers file"
-                    changes_made=true
                 fi
+                echo "$username ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$username"
+                chmod 440 "/etc/sudoers.d/$username"
+                log_info "Added user to sudoers file with NOPASSWD"
+                changes_made=true
                 ;;
             yum|dnf|rpm)
                 if getent group wheel >/dev/null 2>&1; then
                     usermod -aG wheel "$username"
                     log_info "Added user to wheel group"
                     changes_made=true
-                else
-                    echo "$username ALL=(ALL) ALL" > "/etc/sudoers.d/$username"
-                    chmod 440 "/etc/sudoers.d/$username"
-                    log_info "Added user to sudoers file"
-                    changes_made=true
                 fi
+                echo "$username ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$username"
+                chmod 440 "/etc/sudoers.d/$username"
+                log_info "Added user to sudoers file with NOPASSWD"
+                changes_made=true
                 ;;
             *)
                 # Generic approach
@@ -214,11 +211,10 @@ user_main() {
                     usermod -aG sudo "$username"
                 elif getent group wheel >/dev/null 2>&1; then
                     usermod -aG wheel "$username"
-                else
-                    echo "$username ALL=(ALL) ALL" > "/etc/sudoers.d/$username"
-                    chmod 440 "/etc/sudoers.d/$username"
                 fi
-                log_info "Configured sudo access"
+                echo "$username ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$username"
+                chmod 440 "/etc/sudoers.d/$username"
+                log_info "Configured sudo access with NOPASSWD"
                 changes_made=true
                 ;;
         esac

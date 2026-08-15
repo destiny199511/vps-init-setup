@@ -3,6 +3,8 @@
 *.swo
 *.tmp
 *.log
+*.pem
+*.key
 
 config/install-result.env
 config/.state

@@ -63,9 +63,17 @@ cleanup_main() {
             # Check available disk space
             local avail_mb
             avail_mb=$(df -m / | awk 'NR==2 {print $4}')
-            local swap_mb_num
-            swap_mb_num=$(echo "$swap_size" | grep -oP '^\d+')
-            if [[ -n "$avail_mb" ]] && [[ $avail_mb -lt $swap_mb_num ]]; then
+            local swap_unit="${swap_size: -1}"
+            local swap_num="${swap_size%[KMGkmg]}"
+            local swap_target_mb=2048
+            case "${swap_unit^^}" in
+                G) swap_target_mb=$((swap_num * 1024)) ;;
+                M) swap_target_mb=$((swap_num)) ;;
+                K) swap_target_mb=$(( (swap_num + 1023) / 1024 )) ;;
+                *) [[ "$swap_size" =~ ^[0-9]+$ ]] && swap_target_mb=$((swap_size / 1024 / 1024)) || swap_target_mb=2048 ;;
+            esac
+
+            if [[ -n "$avail_mb" ]] && [[ $avail_mb -lt $swap_target_mb ]]; then
                 log_error "Insufficient disk space for swap (${avail_mb}MB available, ${swap_size} needed)"
             else
                 # Create swap file
@@ -74,9 +82,7 @@ cleanup_main() {
                 else
                     # fallocate may not work on some filesystems, fall back to dd
                     log_warn "fallocate failed, using dd (slower)..."
-                    local count
-                    count=$(echo "$swap_size" | grep -oP '^\d+')
-                    dd if=/dev/zero of="$swap_file" bs=1M count="$count" status=progress
+                    dd if=/dev/zero of="$swap_file" bs=1M count="$swap_target_mb" status=progress
                 fi
 
                 chmod 600 "$swap_file"

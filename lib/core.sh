@@ -200,10 +200,10 @@ detect_firewall() {
         printf '%s\n' "firewalld"
         return 0
     fi
-    if command -v nft >/dev/null 2>&1; then
-        if nft list ruleset 2>/dev/null | grep -vE 'DOCKER|docker|br-|CNI-|KUBE-' | grep -qE '(^|[[:space:]])(table|chain)[[:space:]]'; then
-            # Ignore pure Docker/bridge tables when deciding host firewall type.
-            if nft list ruleset 2>/dev/null | grep -vE 'DOCKER|docker|br-|CNI-|KUBE-' | grep -qE 'hook (input|forward)'; then
+    if command -v nft >/dev/null 2>&1 && systemctl is-active --quiet nftables 2>/dev/null; then
+        if nft list ruleset 2>/dev/null | grep -vE 'DOCKER|docker|br-|CNI-|KUBE-|f2b-|f2b_|iptables-nft' | grep -qE '(^|[[:space:]])(table|chain)[[:space:]]'; then
+            # Ignore pure Docker/bridge/fail2ban/iptables-nft tables when deciding host firewall type.
+            if nft list ruleset 2>/dev/null | grep -vE 'DOCKER|docker|br-|CNI-|KUBE-|f2b-|f2b_|iptables-nft' | grep -qE 'hook (input|forward)'; then
                 printf '%s\n' "nftables"
                 return 0
             fi
