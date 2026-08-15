@@ -96,6 +96,8 @@ sudo ./vps_setup.sh
 
 脚本将引导你完成主机名、用户、SSH、安全加固、Docker、备份和监控等配置。
 
+交互式终端会自动启用 Smart TV / BIOS 风格的卡片式 TUI：使用 `↑`、`↓`、`←`、`→` 在选项间移动，按 `Enter` 确认，按 `Esc` 或 `b` 返回上一层。文本输入框中 `b` 是普通字符，返回请使用 `Esc`。支持 SGR 鼠标协议的终端也可以点击卡片直接选择；终端宽度小于 60 列时会回退为传统交互。非 TTY、CI、`-n` 和 `-a` 模式会自动降级为原有的无交互流程，不影响自动化部署。
+
 ### 无人值守安装
 
 无人值守模式应先准备受 root 保护的配置文件。配置文件是严格的 `KEY=VALUE` 数据文件，不会也不能执行 shell 命令；请以 [examples/example_user_config.conf](examples/example_user_config.conf) 为起点。若关闭密码认证，必须提供有效的 `SSH_PUBKEY`，否则在写入 SSH 配置前中止。

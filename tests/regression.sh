@@ -69,8 +69,38 @@ test_unsafe_install_dir_guard() {
         fail "unsafe install directory rejection"
 }
 
+test_tui_engine_load() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source lib/tui.sh
+        declare -F tui_menu_select >/dev/null
+        declare -F tui_yesno_box >/dev/null
+        declare -F tui_card_input >/dev/null
+    ) || fail "TUI engine failed to load or declare functions"
+}
+
+test_tui_noninteractive_fallback() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source lib/tui.sh
+        NON_INTERACTIVE=true
+        AUTO_YES=false
+        local choice input_value
+        tui_menu_select choice "Test" "Test prompt" 2 "first" "second"
+        [ "$choice" = "second" ]
+        tui_card_input input_value "Test" "Test prompt" "default-value"
+        [ "$input_value" = "default-value" ]
+    ) || fail "TUI non-interactive fallback"
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
+test_tui_engine_load
+test_tui_noninteractive_fallback
 test_unsafe_install_dir_guard
 printf 'Regression checks passed.\n'

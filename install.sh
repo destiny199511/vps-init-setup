@@ -189,7 +189,7 @@ validate_release_tree() {
         echo "Downloaded release contains symbolic links; refusing to install it."
         exit 1
     fi
-    for required_file in vps_setup.sh lib/core.sh lib/common.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
+    for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
         if [ ! -f "$release_dir/$required_file" ]; then
             echo "Downloaded release is incomplete: missing $required_file"
             exit 1
@@ -322,7 +322,7 @@ fi
 cd "$INSTALL_DIR"
 chmod +x vps_setup.sh
 
-for required_file in vps_setup.sh lib/core.sh lib/common.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
+for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
     if [ ! -f "$INSTALL_DIR/$required_file" ]; then
         echo "Installation is incomplete: missing $INSTALL_DIR/$required_file"
         exit 1

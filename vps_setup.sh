@@ -14,6 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/core.sh"
 source "${SCRIPT_DIR}/lib/common.sh"
+source "${SCRIPT_DIR}/lib/tui.sh"
 cd "${SCRIPT_DIR}"
 
 # HOSTNAME is commonly pre-populated by the shell; configuration must come from
@@ -74,9 +75,12 @@ NON_INTERACTIVE=false
 # prompt_or_default VAR_NAME "提示文案" "默认值" [ENV_NAME]
 prompt_or_default() {
     local __var="$1" __prompt="$2" __default="$3" __env="${4:-$1}"
-    if [ "$NON_INTERACTIVE" = true ]; then
+    if [ "$NON_INTERACTIVE" = true ] || [ "${AUTO_YES:-false}" = true ]; then
         printf -v "$__var" '%s' "${!__env:-$__default}"
         return 0
+    elif tui_is_supported; then
+        tui_card_input "$__var" "VPS 装机配置录入" "$__prompt" "${!__env:-$__default}" "" false
+        return $?
     else
         local answer
         read -r -p "$__prompt [默认: $__default] (输入 b 返回): " answer
@@ -115,11 +119,14 @@ yesno_box() {
         *) default_display="n" ;;
     esac
 
-    if [ "$NON_INTERACTIVE" = true ]; then
+    if [ "$NON_INTERACTIVE" = true ] || [ "${AUTO_YES:-false}" = true ]; then
         case "$default" in
             [Yy1]|[Yy][eE][sS]|[Tt][Rr][Uu][Ee]) return 0 ;;
             *) return 1 ;;
         esac
+    elif tui_is_supported; then
+        tui_yesno_box "$title" "$prompt" "$default_display" ""
+        return $?
     else
         local answer
         local hint="[Y/n]"
@@ -158,9 +165,12 @@ password_box() {
     local __var="$1"
     local prompt="$2"
 
-    if [ "$NON_INTERACTIVE" = true ]; then
+    if [ "$NON_INTERACTIVE" = true ] || [ "${AUTO_YES:-false}" = true ]; then
         printf -v "$__var" '%s' ""
         return 0
+    elif tui_is_supported; then
+        tui_card_input "$__var" "安全凭据设置" "$prompt" "" "输入密码时字符将掩码显示" true
+        return $?
     else
         local password
         read -rsp "$prompt (输入 b 返回): " password
@@ -182,10 +192,13 @@ menu_select() {
     shift 4
     local options=("$@")
 
-    if [ "$NON_INTERACTIVE" = true ]; then
+    if [ "$NON_INTERACTIVE" = true ] || [ "${AUTO_YES:-false}" = true ]; then
         local def_val="${options[$((default_idx - 1))]}"
         printf -v "$__var" '%s' "$def_val"
         return 0
+    elif tui_is_supported; then
+        tui_menu_select "$__var" "$title" "$prompt" "$default_idx" "${options[@]}"
+        return $?
     else
         echo -e "${CYAN}=== ${title} ===${NC}"
         echo "$prompt"
@@ -833,21 +846,48 @@ run_configuration_wizard() {
 # 模块化分项配置子菜单
 configure_by_sections() {
     while true; do
-        print_section "模块化分项配置菜单"
-        echo -e "请选择需要单独配置或修改的项目:"
-        echo -e "  1) 系统基础配置 (Step 1: Hostname / Timezone / DNS)"
-        echo -e "  2) 用户账户配置 (Step 2: Username / SSH Key / Password)"
-        echo -e "  3) 清理与优化配置 (Step 3: Swap / Snap / Cache / Journal)"
-        echo -e "  4) SSH 加固配置 (Step 4: SSH Port / Root Login)"
-        echo -e "  5) 安全组件配置 (Step 5: Fail2ban / Auditd / MAC)"
-        echo -e "  6) 可选服务配置 (Step 6: Docker / Node.js & NPM)"
-        echo -e "  7) 备份与监控配置 (Step 7: Backup / Node Exporter)"
-        echo -e "  0) 返回主菜单"
-        echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+        local choice="0"
+        if tui_is_supported; then
+            local -a section_items=(
+                "1) 🌐 系统基础配置 (Step 1: Hostname / Timezone / DNS)"
+                "2) 👤 用户账户配置 (Step 2: Username / SSH Key / Password)"
+                "3) 🧹 清理与优化配置 (Step 3: Swap / Snap / Cache / Journal)"
+                "4) 🔒 SSH 加固配置 (Step 4: SSH Port / Root Login)"
+                "5) 🛡️  安全组件配置 (Step 5: Fail2ban / Auditd / MAC)"
+                "6) 🐳 可选服务配置 (Step 6: Docker / Node.js & NPM)"
+                "7) 💾 备份与监控配置 (Step 7: Backup / Node Exporter)"
+                "0) 🔙 返回主菜单"
+            )
+            local sec_choice=""
+            if ! tui_menu_select sec_choice "模块化分项配置 — BIOS 控制台" "请选择需要单独配置或调整的项目:" 1 "${section_items[@]}"; then
+                break
+            fi
+            case "$sec_choice" in
+                "1)"*) choice="1" ;;
+                "2)"*) choice="2" ;;
+                "3)"*) choice="3" ;;
+                "4)"*) choice="4" ;;
+                "5)"*) choice="5" ;;
+                "6)"*) choice="6" ;;
+                "7)"*) choice="7" ;;
+                *) choice="0" ;;
+            esac
+        else
+            print_section "模块化分项配置菜单"
+            echo -e "请选择需要单独配置或修改的项目:"
+            echo -e "  1) 系统基础配置 (Step 1: Hostname / Timezone / DNS)"
+            echo -e "  2) 用户账户配置 (Step 2: Username / SSH Key / Password)"
+            echo -e "  3) 清理与优化配置 (Step 3: Swap / Snap / Cache / Journal)"
+            echo -e "  4) SSH 加固配置 (Step 4: SSH Port / Root Login)"
+            echo -e "  5) 安全组件配置 (Step 5: Fail2ban / Auditd / MAC)"
+            echo -e "  6) 可选服务配置 (Step 6: Docker / Node.js & NPM)"
+            echo -e "  7) 备份与监控配置 (Step 7: Backup / Node Exporter)"
+            echo -e "  0) 返回主菜单"
+            echo -e "${GREEN}═══════════════════════════════════════════${NC}"
 
-        local choice
-        read -r -p "请选择 [0-7] (默认: 0): " choice
-        choice="${choice:-0}"
+            read -r -p "请选择 [0-7] (默认: 0): " choice
+            choice="${choice:-0}"
+        fi
 
         local res=0
         case "$choice" in
@@ -875,20 +915,47 @@ configure_by_sections() {
 # 交互式主菜单
 show_main_menu() {
     while true; do
-        print_section "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单"
-        echo -e "请选择需要执行的操作:"
-        echo -e "  1) 完整向导配置 (Guided Setup Wizard) [默认推荐]"
-        echo -e "  2) 模块化分项配置 (Configure by Section)"
-        echo -e "  3) 预览当前配置 (Review Configuration)"
-        echo -e "  4) 加载 / 重置配置文件 (Manage Config File)"
-        echo -e "  5) 开始执行安装 (Start Installation)"
-        echo -e "  6) 查看模块执行状态 (Check Module Status)"
-        echo -e "  0) 退出程序 (Exit)"
-        echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+        local choice="1"
+        if tui_is_supported; then
+            local -a menu_items=(
+                "🚀 完整向导配置 (Guided Setup Wizard) [推荐首次装机]"
+                "🛠️  模块化分项配置 (Configure by Section) [按模块微调]"
+                "📋 预览当前配置 (Review Configuration) [查看所有生效项]"
+                "🔄 加载/重置配置 (Manage Config File) [重置或重新读取]"
+                "⚡ 开始执行安装 (Start Installation) [确认并立即执行]"
+                "📊 查看模块状态 (Check Module Status) [查询已完成列表]"
+                "🚪 退出装机向导 (Exit Setup Wizard) [退出程序]"
+            )
+            local item_choice=""
+            if ! tui_menu_select item_choice "VPS 一键装机 BIOS 控制台 v${VPS_TOOL_VERSION}" "请选择操作模式 (方向键/鼠标点击选择):" 1 "${menu_items[@]}"; then
+                log_info "用户取消退出系统。"
+                exit 0
+            fi
+            case "$item_choice" in
+                "🚀 完整向导"*) choice="1" ;;
+                "🛠️  模块化"*) choice="2" ;;
+                "📋 预览"*) choice="3" ;;
+                "🔄 加载"*) choice="4" ;;
+                "⚡ 开始"*) choice="5" ;;
+                "📊 查看"*) choice="6" ;;
+                "🚪 退出"*) choice="0" ;;
+                *) choice="1" ;;
+            esac
+        else
+            print_section "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单"
+            echo -e "请选择需要执行的操作:"
+            echo -e "  1) 完整向导配置 (Guided Setup Wizard) [默认推荐]"
+            echo -e "  2) 模块化分项配置 (Configure by Section)"
+            echo -e "  3) 预览当前配置 (Review Configuration)"
+            echo -e "  4) 加载 / 重置配置文件 (Manage Config File)"
+            echo -e "  5) 开始执行安装 (Start Installation)"
+            echo -e "  6) 查看模块执行状态 (Check Module Status)"
+            echo -e "  0) 退出程序 (Exit)"
+            echo -e "${GREEN}═══════════════════════════════════════════${NC}"
 
-        local choice
-        read -r -p "请选择 [0-6] (默认: 1): " choice
-        choice="${choice:-1}"
+            read -r -p "请选择 [0-6] (默认: 1): " choice
+            choice="${choice:-1}"
+        fi
 
         case "$choice" in
             1)
@@ -907,6 +974,9 @@ show_main_menu() {
                 ;;
             3)
                 print_review_card "${#MODULES[@]}"
+                if tui_is_supported; then
+                    read -rp "按任意键返回主菜单..." -n1
+                fi
                 ;;
             4)
                 if [ -f "$CONFIG_FILE" ]; then
@@ -924,6 +994,9 @@ show_main_menu() {
                 ;;
             6)
                 print_status_table MODULES
+                if tui_is_supported; then
+                    read -rp "按任意键返回主菜单..." -n1
+                fi
                 ;;
             0|q|exit)
                 log_info "用户退出系统。"
@@ -942,6 +1015,9 @@ confirm_configuration_review() {
     if [ "$NON_INTERACTIVE" = true ] || [ "$AUTO_YES" = true ]; then
         log_info "非交互/自动模式：跳过 Review 确认，继续安装。"
         return 0
+    elif tui_is_supported; then
+        tui_yesno_box "配置确认 / Final Review" "确认参数无误并开始执行安装？" "y" "开始后将按顺序执行全部 ${modules_count} 个系统初始化模块"
+        return $?
     fi
 
     local answer

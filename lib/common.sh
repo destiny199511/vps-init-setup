@@ -281,6 +281,18 @@ validate_hostname() {
 
 # Apply configuration values to variables with defaults
 apply_config_defaults() {
+    # Apply VPS_SETUP_* environment variable overrides first
+    local var env_var
+    for var in $(get_config_var_names); do
+        env_var="VPS_SETUP_$var"
+        if [ -n "${!env_var:-}" ]; then
+            export "$var"="${!env_var}"
+            if [ "$var" = "HOSTNAME" ]; then
+                HOSTNAME_FROM_CONFIG=true
+            fi
+        fi
+    done
+
     # Set defaults for variables that don't have values yet
     : "${USERNAME:=appadmin}"
     : "${HOSTNAME:=my-vps-server}"
