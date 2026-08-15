@@ -8,16 +8,16 @@ Usage: sudo bash install.sh [options]
 Options:
   --repo-url URL      GitHub repository URL (default: ${REPO_URL})
   --ref REF           GitHub release tag or branch to install (default: ${REF})
-    --install-dir DIR   Target directory (default: ${INSTALL_DIR})
-    --sha256 SHA256      Expected archive SHA-256 (recommended for production)
-    --update-only        Update files without starting the setup wizard
+  --install-dir DIR   Target directory (default: ${INSTALL_DIR})
+  --sha256 SHA256     Expected archive SHA-256 (recommended for production)
+  --update-only       Update files without starting the setup wizard
   --help              Show this help
 
 Environment variables:
   VPS_INIT_SETUP_REPO_URL
   VPS_INIT_SETUP_REF
   VPS_INIT_SETUP_INSTALL_DIR
-    VPS_INIT_SETUP_SHA256
+  VPS_INIT_SETUP_SHA256
 EOF
 }
 
@@ -31,7 +31,7 @@ else
 fi
 REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
 INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
-REF="${VPS_INIT_SETUP_REF:-$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "latest") }"
+REF="${VPS_INIT_SETUP_REF:-$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "latest")}"
 EXPECTED_SHA256="${VPS_INIT_SETUP_SHA256:-}"
 RUN_SETUP=true
 

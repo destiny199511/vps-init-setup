@@ -20,26 +20,31 @@ VPS 一键装机是一个面向 Linux VPS 的自动化初始化工具，旨在�
 
 ### 1. 安装
 
-生产环境请使用不可变的发布标签。标签安装会在解压前下载并校验发布归档的 SHA-256；校验清单缺失或不匹配时安装会中止，不会覆盖现有安装。最高保障方式是在受信任渠道取得发布校验值后，通过 `--sha256` 固定它。
+#### 快速一键安装（推荐）：
+
+在 VPS 上运行以下命令直接从 `main` 分支一键安装或更新：
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+```
+
+#### 生产环境发布标签安装：
+
+在生产环境中，推荐使用不可变的发布标签（Tag）并进行 SHA-256 校验。
+
+```bash
+# 1. 使用指定 Release Tag 安装（要求 GitHub 上已发布该标签）：
 curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
   | sudo bash -s -- --ref v1.0.0
-```
 
-带外校验示例：
-
-```bash
+# 2. 带外指定 SHA-256 校验固定安装（增强安全性）：
 curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --ref v1.0.0 --sha256 <release-archive-sha256>
+  | sudo bash -s -- --ref v1.0.0 --sha256 替换为实际的64位SHA256哈希
 ```
 
-`main` 是开发通道，会显示未校验警告；仅应在测试环境使用：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --ref main
-```
+> **参数说明与注意事项**：
+> 1. `--ref <tag>`：使用的 Tag 必须已在 GitHub Release 中发布。若标签尚未发布，请直接使用上面的快速一键安装命令。
+> 2. `--sha256 <hash>`：请将参数中的哈希替换为实际的 64 位 HEX 字符串（**切勿包含 `<>` 尖括号**，否则 Shell 会将其识别为输入重定向而报语法错误）。
 
 
 ### 2. 本地运行
