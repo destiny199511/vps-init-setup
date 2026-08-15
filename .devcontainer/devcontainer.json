@@ -1,18 +1,25 @@
 {
     "name": "${localWorkspaceFolderBasename}",
-    "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
     "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-    "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind",
     "remoteUser": "vscode",
     "mounts": [
-        "source=cache-${devcontainerId},target=/home/vscode/.cache,type=volume"
+        "source=devcache-${localEnv:USER:unknown}-${localWorkspaceFolderBasename},target=/home/vscode/.cache,type=volume"
     ],
+    "containerEnv": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUNBUFFERED": "1"
+    },
     "customizations": {
         "vscode": {
             "settings": {
                 "terminal.integrated.defaultProfile.linux": "bash"
-            }
+            },
+            "extensions": [
+                "ms-python.python",          // 核心 Python 支持
+                "ms-python.vscode-pylance"   // 语言服务器（补全与类型检查）
+            ]
         }
     },
-    "postCreateCommand": "git config --global --replace-all safe.directory ${containerWorkspaceFolder} 2>/dev/null || git config --global --add safe.directory ${containerWorkspaceFolder}"
+    "postCreateCommand": "git config --global --add safe.directory '*'"
 }
