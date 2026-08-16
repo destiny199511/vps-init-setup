@@ -97,10 +97,23 @@ test_tui_noninteractive_fallback() {
     ) || fail "TUI non-interactive fallback"
 }
 
+test_apt_lock_wait_guard() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        PKG_MGR="apt"
+        APT_LOCK_WAIT=1
+        declare -F wait_for_apt_lock >/dev/null
+        declare -F _apt_lock_holders >/dev/null
+        wait_for_apt_lock
+    ) || fail "apt lock wait guard"
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
 test_tui_engine_load
 test_tui_noninteractive_fallback
+test_apt_lock_wait_guard
 test_unsafe_install_dir_guard
 printf 'Regression checks passed.\n'

@@ -107,6 +107,20 @@ preflight_main() {
         log_info "Running in Docker container"
     fi
 
+    # 7. Check whether unattended-upgrades is holding dpkg lock (common on fresh Ubuntu/Debian)
+    if [ "${PKG_MGR:-}" = "apt" ] && command -v fuser >/dev/null 2>&1; then
+        local lock_pids
+        lock_pids=$(fuser /var/lib/dpkg/lock-frontend 2>/dev/null | tr -s ' \t' '\n' | grep -E '^[0-9]+$' | tr '\n' ' ')
+        if [ -n "$lock_pids" ]; then
+            local proc_name=""
+            for pid in $lock_pids; do
+                proc_name="${proc_name}$(ps -p "$pid" -o comm= 2>/dev/null || echo unknown) "
+            done
+            log_warn "检测到进程 ${lock_pids}(${proc_name}) 正持有 dpkg 锁"
+            log_warn "可能是系统开机自动安全更新 (unattended-upgrades)；安装模块会等待其释放"
+        fi
+    fi
+
     # Report findings
     if [ "$issues_found" -gt 0 ]; then
         log_error "Preflight check found $issues_found issue(s)"

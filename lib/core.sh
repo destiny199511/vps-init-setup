@@ -263,10 +263,59 @@ detect_environment() {
     fi
 }
 
+# _apt_lock_holders: 输出持有 dpkg/apt 前端锁的进程 PID（空则无锁）
+# 新 Ubuntu/Debian VPS 开机后 unattended-upgrades 会长时间持有该锁
+_apt_lock_holders() {
+    local lock_file="/var/lib/dpkg/lock-frontend"
+    local lock_file2="/var/lib/dpkg/lock"
+    local pids=""
+    if command -v fuser >/dev/null 2>&1; then
+        pids=$(fuser "$lock_file" "$lock_file2" 2>/dev/null | tr -s ' \t' '\n' | grep -E '^[0-9]+$' | sort -u | tr '\n' ' ')
+    elif command -v lsof >/dev/null 2>&1; then
+        pids=$(lsof -t "$lock_file" "$lock_file2" 2>/dev/null | sort -u | tr '\n' ' ')
+    fi
+    printf '%s' "${pids% }"
+}
+
+# wait_for_apt_lock: 在 apt 系上等待 dpkg 前端锁释放（默认最多 300 秒）
+# 非 apt 包管理器直接返回成功
+wait_for_apt_lock() {
+    [ "${PKG_MGR:-}" = "apt" ] || return 0
+    local max_wait="${APT_LOCK_WAIT:-300}"
+    local poll_interval=5
+    local waited=0
+    local holders proc_name
+
+    holders="$(_apt_lock_holders)"
+    while [ -n "$holders" ]; do
+        if [ "$waited" -ge "$max_wait" ]; then
+            log_error "等待 dpkg 锁超时 (${max_wait}s)，进程 ${holders} 仍持有 /var/lib/dpkg/lock-frontend"
+            log_error "可能是 unattended-upgrades 或 apt 正在运行；请稍后重试，或手动停止该进程后重跑"
+            return 1
+        fi
+        if [ "$waited" -eq 0 ]; then
+            proc_name=""
+            for pid in $holders; do
+                proc_name="${proc_name}$(ps -p "$pid" -o comm= 2>/dev/null || echo unknown) "
+            done
+            log_warn "检测到进程 ${holders}(${proc_name}) 正持有 dpkg 锁，等待其释放（最多 ${max_wait}s）..."
+        fi
+        sleep "$poll_interval"
+        waited=$((waited + poll_interval))
+        holders="$(_apt_lock_holders)"
+    done
+
+    if [ "$waited" -gt 0 ]; then
+        log_info "dpkg 锁已释放，继续安装"
+    fi
+    return 0
+}
+
 # install_pkg: 跨发行版安装软件包
 install_pkg() {
     local pkg="$1"
     log_info "安装软件包: ${pkg}"
+    wait_for_apt_lock || return 1
     if [[ "${PKG_UPDATE}" ]]; then
         eval "${PKG_UPDATE}" || true
     fi
@@ -283,6 +332,7 @@ install_package() {
 }
 
 apt_update() {
+    wait_for_apt_lock || return 1
     if [[ -n "${PKG_UPDATE:-}" ]]; then
         eval "${PKG_UPDATE}"
     fi
@@ -292,6 +342,7 @@ apt_update() {
 remove_pkg() {
     local pkg="$1"
     log_info "卸载软件包: ${pkg}"
+    wait_for_apt_lock || return 1
     eval "${PKG_REMOVE} ${pkg}" || true
     audit "PKG_REMOVE" "${pkg}"
 }

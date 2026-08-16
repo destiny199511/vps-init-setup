@@ -470,6 +470,29 @@ TUI 操作键：
 
 自动检测包管理器（apt/yum/dnf/apk）和 init 系统（systemd/SysVinit/OpenRC）。
 
+## 已知环境行为
+
+### dpkg 锁与 unattended-upgrades
+
+新 Ubuntu/Debian VPS 开机后，系统通常会自动运行 `unattended-upgrades` 安装安全更新，期间会持有 dpkg 前端锁（`/var/lib/dpkg/lock-frontend`）。若此时立即执行本工具，软件包安装可能因无法获取锁而失败：
+
+```
+E: 无法获得锁 /var/lib/dpkg/lock-frontend。锁正由进程 12882（unattended-upgr）持有
+```
+
+本工具已内置应对：
+- `00_preflight` 会在预检阶段检测并提示 dpkg 锁被持有。
+- 所有 apt 系的安装/更新/卸载操作前会调用 `wait_for_apt_lock`，等待锁释放（默认最多 300 秒），并记录持有进程名。
+- 超时后返回失败并给出明确日志，可稍后重跑（已完成的模块会幂等跳过）。
+- 可通过环境变量 `APT_LOCK_WAIT=<秒>` 调整最大等待时间，例如 `APT_LOCK_WAIT=600 ./vps_setup.sh -n`。
+
+如需立即手动释放锁（生产环境慎用，建议等待自动更新结束）：
+
+```bash
+sudo systemctl stop unattended-upgrades 2>/dev/null || true
+sudo systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+```
+
 ## 开发与贡献
 
 ### 语法检查
