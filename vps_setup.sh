@@ -849,43 +849,43 @@ configure_by_sections() {
         local choice="0"
         if tui_is_supported; then
             local -a section_items=(
-                "1) 🌐 系统基础配置 (Step 1: Hostname / Timezone / DNS)"
-                "2) 👤 用户账户配置 (Step 2: Username / SSH Key / Password)"
-                "3) 🧹 清理与优化配置 (Step 3: Swap / Snap / Cache / Journal)"
-                "4) 🔒 SSH 加固配置 (Step 4: SSH Port / Root Login)"
-                "5) 🛡️  安全组件配置 (Step 5: Fail2ban / Auditd / MAC)"
-                "6) 🐳 可选服务配置 (Step 6: Docker / Node.js & NPM)"
-                "7) 💾 备份与监控配置 (Step 7: Backup / Node Exporter)"
-                "0) 🔙 返回主菜单"
+                "系统基础配置 (Hostname / Timezone / DNS)"
+                "用户账户配置 (Username / SSH Key / Password)"
+                "清理与优化配置 (Swap / Snap / Cache / Journal)"
+                "SSH 加固配置 (SSH Port / Root Login)"
+                "安全组件配置 (Fail2ban / Auditd / MAC)"
+                "可选服务配置 (Docker / Node.js & NPM)"
+                "备份与监控配置 (Backup / Node Exporter)"
+                "返回主菜单"
             )
             local sec_choice=""
-            if ! tui_menu_select sec_choice "模块化分项配置 — BIOS 控制台" "请选择需要单独配置或调整的项目:" 1 "${section_items[@]}"; then
+            if ! tui_menu_select sec_choice "模块化分项配置菜单" "请选择需要单独配置或调整的项目 (可随时返回):" 1 "${section_items[@]}"; then
                 break
             fi
             case "$sec_choice" in
-                "1)"*) choice="1" ;;
-                "2)"*) choice="2" ;;
-                "3)"*) choice="3" ;;
-                "4)"*) choice="4" ;;
-                "5)"*) choice="5" ;;
-                "6)"*) choice="6" ;;
-                "7)"*) choice="7" ;;
+                "系统基础"*) choice="1" ;;
+                "用户账户"*) choice="2" ;;
+                "清理与优化"*) choice="3" ;;
+                "SSH 加固"*) choice="4" ;;
+                "安全组件"*) choice="5" ;;
+                "可选服务"*) choice="6" ;;
+                "备份与监控"*) choice="7" ;;
                 *) choice="0" ;;
             esac
         else
             print_section "模块化分项配置菜单"
-            echo -e "请选择需要单独配置或修改的项目:"
-            echo -e "  1) 系统基础配置 (Step 1: Hostname / Timezone / DNS)"
-            echo -e "  2) 用户账户配置 (Step 2: Username / SSH Key / Password)"
-            echo -e "  3) 清理与优化配置 (Step 3: Swap / Snap / Cache / Journal)"
-            echo -e "  4) SSH 加固配置 (Step 4: SSH Port / Root Login)"
-            echo -e "  5) 安全组件配置 (Step 5: Fail2ban / Auditd / MAC)"
-            echo -e "  6) 可选服务配置 (Step 6: Docker / Node.js & NPM)"
-            echo -e "  7) 备份与监控配置 (Step 7: Backup / Node Exporter)"
-            echo -e "  0) 返回主菜单"
-            echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+            echo -e "  \033[1;36m│\033[0m  请选择需要单独配置或修改的项目:"
+            echo -e "  \033[1;36m│\033[0m   1) 系统基础配置 (Hostname / Timezone / DNS)"
+            echo -e "  \033[1;36m│\033[0m   2) 用户账户配置 (Username / SSH Key / Password)"
+            echo -e "  \033[1;36m│\033[0m   3) 清理与优化配置 (Swap / Snap / Cache / Journal)"
+            echo -e "  \033[1;36m│\033[0m   4) SSH 加固配置 (SSH Port / Root Login)"
+            echo -e "  \033[1;36m│\033[0m   5) 安全组件配置 (Fail2ban / Auditd / MAC)"
+            echo -e "  \033[1;36m│\033[0m   6) 可选服务配置 (Docker / Node.js & NPM)"
+            echo -e "  \033[1;36m│\033[0m   7) 备份与监控配置 (Backup / Node Exporter)"
+            echo -e "  \033[1;36m│\033[0m   0) 返回主菜单"
+            echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
-            read -r -p "请选择 [0-7] (默认: 0): " choice
+            read -r -p "  请选择 [0-7] (默认: 0): " choice
             choice="${choice:-0}"
         fi
 
@@ -918,42 +918,42 @@ show_main_menu() {
         local choice="1"
         if tui_is_supported; then
             local -a menu_items=(
-                "🚀 完整向导配置 (Guided Setup Wizard) [推荐首次装机]"
-                "🛠️  模块化分项配置 (Configure by Section) [按模块微调]"
-                "📋 预览当前配置 (Review Configuration) [查看所有生效项]"
-                "🔄 加载/重置配置 (Manage Config File) [重置或重新读取]"
-                "⚡ 开始执行安装 (Start Installation) [确认并立即执行]"
-                "📊 查看模块状态 (Check Module Status) [查询已完成列表]"
-                "🚪 退出装机向导 (Exit Setup Wizard) [退出程序]"
+                "完整向导配置 (Guided Setup Wizard)    [推荐首次装机]"
+                "模块化分项配置 (Configure by Section)  [按模块微调]"
+                "预览当前配置 (Review Configuration)   [查看生效项]"
+                "加载 / 重置配置 (Manage Config File)  [重置或重新读取]"
+                "开始执行安装 (Start Installation)     [确认并立即执行]"
+                "查看模块状态 (Check Module Status)    [查询完成清单]"
+                "退出装机向导 (Exit Setup Wizard)      [退出程序]"
             )
             local item_choice=""
-            if ! tui_menu_select item_choice "VPS 一键装机 BIOS 控制台 v${VPS_TOOL_VERSION}" "请选择操作模式 (方向键/鼠标点击选择):" 1 "${menu_items[@]}"; then
+            if ! tui_menu_select item_choice "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单" "请选择操作模式 (↑/↓ 移动, Enter 确认, 1-7 秒选):" 1 "${menu_items[@]}"; then
                 log_info "用户取消退出系统。"
                 exit 0
             fi
             case "$item_choice" in
-                "🚀 完整向导"*) choice="1" ;;
-                "🛠️  模块化"*) choice="2" ;;
-                "📋 预览"*) choice="3" ;;
-                "🔄 加载"*) choice="4" ;;
-                "⚡ 开始"*) choice="5" ;;
-                "📊 查看"*) choice="6" ;;
-                "🚪 退出"*) choice="0" ;;
+                "完整向导"*) choice="1" ;;
+                "模块化"*) choice="2" ;;
+                "预览"*) choice="3" ;;
+                "加载"*) choice="4" ;;
+                "开始"*) choice="5" ;;
+                "查看"*) choice="6" ;;
+                "退出"*) choice="0" ;;
                 *) choice="1" ;;
             esac
         else
             print_section "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单"
-            echo -e "请选择需要执行的操作:"
-            echo -e "  1) 完整向导配置 (Guided Setup Wizard) [默认推荐]"
-            echo -e "  2) 模块化分项配置 (Configure by Section)"
-            echo -e "  3) 预览当前配置 (Review Configuration)"
-            echo -e "  4) 加载 / 重置配置文件 (Manage Config File)"
-            echo -e "  5) 开始执行安装 (Start Installation)"
-            echo -e "  6) 查看模块执行状态 (Check Module Status)"
-            echo -e "  0) 退出程序 (Exit)"
-            echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+            echo -e "  \033[1;36m│\033[0m  请选择需要执行的操作:"
+            echo -e "  \033[1;36m│\033[0m   1) 完整向导配置 (Guided Setup Wizard) [默认推荐]"
+            echo -e "  \033[1;36m│\033[0m   2) 模块化分项配置 (Configure by Section)"
+            echo -e "  \033[1;36m│\033[0m   3) 预览当前配置 (Review Configuration)"
+            echo -e "  \033[1;36m│\033[0m   4) 加载 / 重置配置文件 (Manage Config File)"
+            echo -e "  \033[1;36m│\033[0m   5) 开始执行安装 (Start Installation)"
+            echo -e "  \033[1;36m│\033[0m   6) 查看模块执行状态 (Check Module Status)"
+            echo -e "  \033[1;36m│\033[0m   0) 退出程序 (Exit)"
+            echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
-            read -r -p "请选择 [0-6] (默认: 1): " choice
+            read -r -p "  请选择 [0-6] (默认: 1): " choice
             choice="${choice:-1}"
         fi
 

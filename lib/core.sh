@@ -697,37 +697,36 @@ print_separator() {
     echo -e "${GREEN}${line}${NC}"
 }
 
-# print_header: 启动/大标题横幅
+# print_header: 现代卡片大标题横幅
 print_header() {
     local text="$1"
     echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}${BOLD}  ${text}${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  \033[1;36m╭──────────────────────────────────────────────────────────╮\033[0m"
+    echo -e "  \033[1;36m│\033[0m   \033[1;37m${text}\033[0m"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────╯\033[0m"
     echo ""
 }
 
-# print_section: 3x-ui 风格分区标题
+# print_section: 现代化分区标题卡片
 print_section() {
     local title="$1"
     echo ""
-    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
-    echo -e "${GREEN}     ${title}${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+    echo -e "  \033[1;36m╭─ \033[1;37m${title}\033[1;36m ──────────────────────────────────────────\033[0m"
 }
 
-# print_step: 步骤提示（支持 3/7 形式）
+# print_step: 步骤提示（如 Step 1/7）
 print_step() {
     local num="$1"; shift
-    echo -e "\n${CYAN}[Step ${num}]${NC} ${BOLD}$*${NC}"
+    echo ""
+    echo -e "  \033[1;36m╭─ \033[1;33m[Step ${num}]\033[0m \033[1;37m$*\033[1;36m ──────────────────────────────\033[0m"
 }
 
-# print_kv: 对齐的键值展示
+# print_kv: 对齐优雅的键值展示
 print_kv() {
     local key="$1"
     local value="$2"
-    local color="${3:-$GREEN}"
-    printf "  ${color}%-14s${NC} %s\n" "${key}" "${value}"
+    local color="${3:-$CYAN}"
+    printf "  \033[1;36m│\033[0m  ${color}%-16s\033[0m %s\n" "${key}" "${value}"
 }
 
 # print_module_progress: 模块执行进度行
@@ -737,7 +736,7 @@ print_module_progress() {
     local name="$3"
     local desc="$4"
     echo ""
-    echo -e "${CYAN}[Module ${index}/${total}]${NC} ${BOLD}${name}${NC} — ${desc}"
+    printf "  \033[1;36m[%02d/%02d]\033[0m \033[1;37m%-16s\033[0m \033[2;37m── %s\033[0m\n" "$index" "$total" "$name" "$desc"
 }
 
 # print_module_result: 模块结果行
@@ -747,16 +746,16 @@ print_module_result() {
     local detail="${3:-}"
     case "${status}" in
         done|success|ok)
-            echo -e "  ${GREEN}✓${NC} ${name} 完成${detail:+ — ${detail}}"
+            echo -e "         \033[1;32m✔ 完成\033[0m${detail:+ \033[2;37m(${detail})\033[0m}"
             ;;
         failed|error)
-            echo -e "  ${RED}✗${NC} ${name} 失败${detail:+ — ${detail}}"
+            echo -e "         \033[1;31m✖ 失败\033[0m${detail:+ \033[1;31m(${detail})\033[0m}"
             ;;
         skipped)
-            echo -e "  ${YELLOW}~${NC} ${name} 跳过${detail:+ — ${detail}}"
+            echo -e "         \033[38;5;243m~ 跳过\033[0m${detail:+ \033[2;37m(${detail})\033[0m}"
             ;;
         *)
-            echo -e "  ${BLUE}?${NC} ${name}: ${status}${detail:+ — ${detail}}"
+            echo -e "         \033[1;34m? ${status}\033[0m${detail:+ \033[2;37m(${detail})\033[0m}"
             ;;
     esac
 }
@@ -784,33 +783,32 @@ detect_server_ip() {
 # print_review_card: 安装前配置确认
 print_review_card() {
     local modules_count="${1:-0}"
-    print_section "配置确认 / Review"
-    print_kv "主机名:" "${HOSTNAME:-}"
-    print_kv "管理用户:" "${USERNAME:-}"
-    print_kv "时区:" "${TIMEZONE:-}"
-    print_kv "语言:" "${LOCALE:-}"
-    print_kv "DNS:" "${PRIMARY_DNS:-} / ${SECONDARY_DNS:-}"
-    print_kv "SSH 端口:" "${SSH_PORT:-}"
+    print_section "配置确认 / Configuration Review"
+    print_kv "主机名 (Hostname):" "${HOSTNAME:-}"
+    print_kv "管理用户 (User):" "${USERNAME:-}"
+    print_kv "时区 (Timezone):" "${TIMEZONE:-}"
+    print_kv "语言 (Locale):" "${LOCALE:-}"
+    print_kv "DNS 服务器:" "${PRIMARY_DNS:-} / ${SECONDARY_DNS:-}"
+    print_kv "SSH 端口 (Port):" "${SSH_PORT:-}"
     print_kv "保留旧 SSH 端口:" "${SSH_KEEP_LEGACY_PORT:-true}"
-    print_kv "Root 登录:" "${PERMIT_ROOT_LOGIN:-}"
+    print_kv "Root 远程登录:" "${PERMIT_ROOT_LOGIN:-}"
     if [ "${PASSWORD_AUTH:-no}" = "yes" ]; then
-        print_kv "密码认证:" "yes (密码已设置: $([ -n "${USER_PASSWORD:-}" ] && echo 是 || echo 否))"
+        print_kv "密码认证 (Password):" "yes (密码已设置: $([ -n "${USER_PASSWORD:-}" ] && echo 是 || echo 否))"
     else
-        print_kv "密码认证:" "no"
+        print_kv "密码认证 (Password):" "no"
     fi
-    print_kv "公钥认证:" "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-}}"
-    print_kv "Fail2ban:" "${INSTALL_FAIL2BAN:-}"
-    print_kv "Docker:" "${INSTALL_DOCKER:-}"
-    print_kv "NPM:" "${INSTALL_NPM:-}"
-    print_kv "备份:" "${ENABLE_BACKUP:-}"
-    print_kv "监控:" "${ENABLE_MONITORING:-${INSTALL_NODE_EXPORTER:-}}"
-    print_kv "清理优化:" "swap=${ENABLE_SWAP:-} size=${SWAP_SIZE:-自动} file=${SWAP_FILE:-/swapfile} swappiness=${SWAPPINESS:-10} vfs_cache_pressure=${VFS_CACHE_PRESSURE:-50} snap=${REMOVE_SNAP:-} cache=${CLEAN_PKG_CACHE:-} journal=${CLEAN_JOURNAL:-}"
-    print_kv "防火墙 SSH:" "TCP/${SSH_PORT:-22} (将放行)"
-    print_kv "将执行模块:" "${modules_count} 个"
-    print_kv "配置文件:" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
-    print_kv "日志文件:" "${LOG_FILE}"
-    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
-    echo -e "${YELLOW}⚠ 请确认以上配置；开始后将按模块顺序执行系统变更。${NC}"
+    print_kv "公钥认证 (Pubkey):" "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-}}"
+    print_kv "Fail2ban 防爆破:" "${INSTALL_FAIL2BAN:-}"
+    print_kv "Docker 容器引擎:" "${INSTALL_DOCKER:-}"
+    print_kv "Node.js & NPM:" "${INSTALL_NPM:-}"
+    print_kv "自动备份任务:" "${ENABLE_BACKUP:-}"
+    print_kv "系统监控端:" "${ENABLE_MONITORING:-${INSTALL_NODE_EXPORTER:-}}"
+    print_kv "系统清理优化:" "swap=${ENABLE_SWAP:-} snap=${REMOVE_SNAP:-} cache=${CLEAN_PKG_CACHE:-}"
+    print_kv "执行模块范围:" "${modules_count} 个模块"
+    print_kv "持久化配置文件:" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
+    print_kv "安装日志路径:" "${LOG_FILE}"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
+    echo -e "  \033[1;33m⚠ 提示: 开始后将按模块顺序执行系统配置与组件安装。\033[0m\n"
 }
 
 # write_install_result: 落盘可 source 的安装结果（权限 600）
@@ -875,55 +873,53 @@ print_completion_card() {
     elif [[ "$all_modules_skipped" == "true" ]]; then
         print_section "未执行变更 / No Changes Applied"
     else
-        print_section "安装完成 / Setup Complete"
+        print_section "装机完成 / Setup Complete"
     fi
 
-    print_kv "耗时:" "${duration}"
-    print_kv "主机名:" "${HOSTNAME:-}"
-    print_kv "管理用户:" "${USERNAME:-}"
-    print_kv "SSH 端口:" "${SSH_PORT:-}"
-    print_kv "Root 登录:" "${PERMIT_ROOT_LOGIN:-}"
-    print_kv "密码认证:" "${PASSWORD_AUTH:-}"
+    print_kv "总耗时 (Time):" "${duration}"
+    print_kv "主机名 (Host):" "${HOSTNAME:-}"
+    print_kv "管理用户 (User):" "${USERNAME:-}"
+    print_kv "SSH 端口 (Port):" "${SSH_PORT:-}"
+    print_kv "Root 远程登录:" "${PERMIT_ROOT_LOGIN:-}"
+    print_kv "密码认证登录:" "${PASSWORD_AUTH:-}"
     if [[ -n "${server_ip}" ]]; then
-        print_kv "服务器 IP:" "${server_ip}"
-        print_kv "登录命令:" "ssh -p ${SSH_PORT:-22} ${USERNAME:-root}@${server_ip}"
+        print_kv "服务器公网 IP:" "${server_ip}"
+        print_kv "SSH 登录命令:" "\033[1;32mssh -p ${SSH_PORT:-22} ${USERNAME:-root}@${server_ip}\033[0m"
     else
-        print_kv "登录命令:" "ssh -p ${SSH_PORT:-22} ${USERNAME:-root}@SERVER_IP"
+        print_kv "SSH 登录命令:" "\033[1;32mssh -p ${SSH_PORT:-22} ${USERNAME:-root}@SERVER_IP\033[0m"
     fi
-    print_kv "Fail2ban:" "${INSTALL_FAIL2BAN:-}"
-    print_kv "Docker:" "${INSTALL_DOCKER:-}"
-    print_kv "备份:" "${ENABLE_BACKUP:-}"
-    print_kv "监控:" "${ENABLE_MONITORING:-}"
-    print_kv "配置文件:" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
-    print_kv "结果文件:" "${INSTALL_RESULT_FILE}"
-    print_kv "完整日志:" "${LOG_FILE}"
-    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+    print_kv "Fail2ban 防爆破:" "${INSTALL_FAIL2BAN:-}"
+    print_kv "Docker 容器引擎:" "${INSTALL_DOCKER:-}"
+    print_kv "定时备份配置:" "${ENABLE_BACKUP:-}"
+    print_kv "监控组件端:" "${ENABLE_MONITORING:-}"
+    print_kv "持久化配置文件:" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
+    print_kv "安装结果凭据:" "${INSTALL_RESULT_FILE}"
+    print_kv "完整安装日志:" "${LOG_FILE}"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
     print_actual_vps_status "$dry_run"
 
     if [[ -n "${module_summary}" ]]; then
-        echo -e "${BOLD}模块结果:${NC}"
+        echo ""
+        echo -e "  \033[1;37m模块执行统计:\033[0m"
         echo -e "${module_summary}"
-        echo -e "${GREEN}═══════════════════════════════════════════${NC}"
     fi
 
     if [[ "${dry_run}" != "true" && "${FAILED_COUNT:-0}" -gt 0 ]]; then
-        echo -e "${RED}✗ 有 ${FAILED_COUNT} 个模块失败，请根据上方实际状态和日志修复后重试。${NC}"
+        echo -e "\n  \033[1;31m✖ 有 ${FAILED_COUNT} 个模块失败，请根据上方状态和日志排查。\033[0m"
     elif [[ "${dry_run}" != "true" && "$all_modules_skipped" == "true" ]]; then
-        echo -e "${YELLOW}⚠ 本次没有执行任何模块；如需重新检查 SSH、防火墙或 Fail2ban，请使用 -f 强制执行。${NC}"
+        echo -e "\n  \033[1;33m⚠ 本次没有执行任何模块；如需重跑请使用 -f 参数强制执行。\033[0m"
     elif [[ "${dry_run}" != "true" ]]; then
-        echo -e "${YELLOW}⚠ 请立即保存 SSH 端口与登录信息；更改端口后请先新开终端验证再断开当前会话。${NC}"
+        echo -e "\n  \033[1;33m⚠ 安全提醒: 请新建终端测试新 SSH 端口登录，确认无误后再断开当前会话。\033[0m"
     fi
 
-    echo -e "${BOLD}下一步 / 常用命令:${NC}"
-    cat <<EOF
-┌───────────────────────────────────────────────────────┐
-│  sudo ${SCRIPT_ROOT}/vps_setup.sh --status             │
-│  sudo ${SCRIPT_ROOT}/vps_setup.sh -n --modules 05_ssh │
-│  sudo ${SCRIPT_ROOT}/vps_setup.sh -d -n                │
-│  tail -f ${LOG_FILE}
-└───────────────────────────────────────────────────────┘
-EOF
+    echo ""
+    echo -e "  \033[1;36m╭─ \033[1;37m常用快捷命令\033[1;36m ──────────────────────────────────────────\033[0m"
+    echo -e "  \033[1;36m│\033[0m  查看模块状态:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh --status\033[0m"
+    echo -e "  \033[1;36m│\033[0m  仅执行单模块:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -n --modules 05_ssh\033[0m"
+    echo -e "  \033[1;36m│\033[0m  试运行预览:    \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -d -n\033[0m"
+    echo -e "  \033[1;36m│\033[0m  实时查看日志:  \033[1;37mtail -f ${LOG_FILE}\033[0m"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
 }
 
 collect_actual_vps_status() {
@@ -996,28 +992,29 @@ collect_actual_vps_status() {
 print_actual_vps_status() {
     local dry_run="${1:-false}"
     collect_actual_vps_status
-    print_section "VPS 实际生效状态 / Actual State"
+    print_section "VPS 实际生效状态 / Live System State"
     if [ "$dry_run" = true ]; then
-        echo -e "${YELLOW}⚠ 以下为当前运行环境状态；试运行未修改 VPS 配置。${NC}"
+        echo -e "  \033[1;36m│\033[0m  \033[1;33m⚠ 当前为系统原始状态（试运行未应用变更）\033[0m"
     fi
-    print_kv "主机名:" "$ACTUAL_HOSTNAME"
-    print_kv "系统:" "$ACTUAL_OS"
-    print_kv "架构:" "$ACTUAL_ARCH"
-    print_kv "时区:" "$ACTUAL_TIMEZONE"
-    print_kv "Locale:" "$ACTUAL_LOCALE"
-    print_kv "管理用户:" "$ACTUAL_USER"
-    print_kv "SSH 服务:" "$ACTUAL_SSH_SERVICE"
-    print_kv "监听地址:" "$ACTUAL_SSH_PORTS"
-    print_kv "防火墙:" "$ACTUAL_FIREWALL"
-    print_kv "Swap:" "$ACTUAL_SWAP"
-    print_kv "Docker:" "$ACTUAL_DOCKER"
-    print_kv "Fail2ban:" "$ACTUAL_FAIL2BAN"
+    print_kv "主机名 (Hostname):" "$ACTUAL_HOSTNAME"
+    print_kv "系统版本 (OS):" "$ACTUAL_OS"
+    print_kv "硬件架构 (Arch):" "$ACTUAL_ARCH"
+    print_kv "系统时区 (Zone):" "$ACTUAL_TIMEZONE"
+    print_kv "语言环境 (Lang):" "$ACTUAL_LOCALE"
+    print_kv "管理用户 (User):" "$ACTUAL_USER"
+    print_kv "SSH 服务状态:" "$ACTUAL_SSH_SERVICE"
+    print_kv "SSH 监听端口:" "$ACTUAL_SSH_PORTS"
+    print_kv "防火墙状态:" "$ACTUAL_FIREWALL"
+    print_kv "Swap 状态:" "$ACTUAL_SWAP"
+    print_kv "Docker 状态:" "$ACTUAL_DOCKER"
+    print_kv "Fail2ban 状态:" "$ACTUAL_FAIL2BAN"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 }
 
 # print_status_table: 美化模块状态表
 print_status_table() {
     local -n _modules_ref=$1
-    print_section "模块执行状态"
+    print_section "模块执行状态清单 / Module Status"
     local module name desc status icon color
     for module in "${_modules_ref[@]}"; do
         name="${module%%:*}"
@@ -1027,15 +1024,15 @@ print_status_table() {
             status="pending"
         fi
         case "${status}" in
-            done)    icon="✓"; color="${GREEN}" ;;
-            skipped) icon="~"; color="${YELLOW}" ;;
-            failed)  icon="✗"; color="${RED}" ;;
+            done)    icon="✔"; color="${GREEN}"; status="已完成" ;;
+            skipped) icon="~"; color="${YELLOW}"; status="已跳过" ;;
+            failed)  icon="✖"; color="${RED}"; status="失败" ;;
             pending|未运行) icon="·"; color="${DIM}"; status="未运行" ;;
             *)       icon="?"; color="${BLUE}" ;;
         esac
-        printf "  ${color}%s${NC} %-18s %-36s [%s]\n" "${icon}" "${name}" "${desc}" "${status}"
+        printf "  \033[1;36m│\033[0m  ${color}%s\033[0m \033[1;37m%-18s\033[0m %-30s \033[2;37m[%s]\033[0m\n" "${icon}" "${name}" "${desc}" "${status}"
     done
-    echo -e "${GREEN}═══════════════════════════════════════════${NC}"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
 }
 
 #===============================================================================
@@ -1054,11 +1051,13 @@ init_system() {
 # print_startup_banner: 启动页
 print_startup_banner() {
     local mode_label="${1:-交互式配置向导}"
-    print_header "VPS 一键装机 v${VPS_TOOL_VERSION}"
-    print_kv "系统:" "${OS_PRETTY:-unknown} | ${ARCH:-$(uname -m)}"
-    print_kv "包管理:" "${PKG_MGR:-unknown}"
-    print_kv "服务管理:" "${SVC_MGR:-unknown}"
-    print_kv "模式:" "${mode_label}"
-    print_kv "日志:" "${LOG_FILE}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  \033[1;36m╭──────────────────────────────────────────────────────────╮\033[0m"
+    echo -e "  \033[1;36m│\033[0m  \033[1;37m❖ VPS 一键装机 v${VPS_TOOL_VERSION}\033[0m"
+    echo -e "  \033[1;36m├──────────────────────────────────────────────────────────┤\033[0m"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "系统环境:" "${OS_PRETTY:-unknown} (${ARCH:-$(uname -m)})"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "包管理器:" "${PKG_MGR:-unknown}"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "运行模式:" "${mode_label}"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "日志路径:" "${LOG_FILE}"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────╯\033[0m"
 }
