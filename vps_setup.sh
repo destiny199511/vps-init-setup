@@ -83,7 +83,10 @@ prompt_or_default() {
         return $?
     else
         local answer
-        read -r -p "$__prompt [默认: $__default] (输入 b 返回): " answer
+        # read returns non-zero on EOF (piped stdin exhausted) — treat as cancel
+        if ! read -r -p "$__prompt [默认: $__default] (输入 b 返回): " answer; then
+            return 2
+        fi
         if [ "$answer" = "b" ] || [ "$answer" = "back" ]; then
             return 2
         fi
@@ -136,7 +139,10 @@ yesno_box() {
         echo -e "  2) 否 (No)"
         echo -e "  b) 返回上一步"
         while true; do
-            read -r -p "$prompt (选择 1/2 或 $hint, 默认: $default_display): " answer
+            # read returns non-zero on EOF (piped stdin exhausted) — treat as cancel
+            if ! read -r -p "$prompt (选择 1/2 或 $hint, 默认: $default_display): " answer; then
+                return 2
+            fi
             if [ "$answer" = "b" ] || [ "$answer" = "back" ]; then
                 return 2
             fi
@@ -173,7 +179,10 @@ password_box() {
         return $?
     else
         local password
-        read -rsp "$prompt (输入 b 返回): " password
+        # read returns non-zero on EOF (piped stdin exhausted) — treat as cancel
+        if ! read -rsp "$prompt (输入 b 返回): " password; then
+            return 2
+        fi
         echo
         if [ "$password" = "b" ] || [ "$password" = "back" ]; then
             return 2
@@ -215,7 +224,10 @@ menu_select() {
 
         local choice
         while true; do
-            read -r -p "请选择 [1-$((index - 1))] (默认: $default_idx, 输入 b 返回): " choice
+            # read returns non-zero on EOF (piped stdin exhausted) — treat as cancel
+            if ! read -r -p "请选择 [1-$((index - 1))] (默认: $default_idx, 输入 b 返回): " choice; then
+                return 2
+            fi
             if [ "$choice" = "b" ] || [ "$choice" = "back" ]; then
                 return 2
             fi
@@ -401,6 +413,11 @@ configure_user() {
                     [ "$res" -eq 2 ] && { sub_step=2; continue; }
                     if [ "$password_auth" != "yes" ] && ! printf '%s\n' "$ssh_pubkey" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
                         echo -e "${RED}仅公钥认证必须提供有效 SSH 公钥；也可返回上一步改用密码认证。${NC}"
+                        # Prevent infinite loop when stdin is exhausted (non-interactive)
+                        if [ "$NON_INTERACTIVE" = true ] || [ ! -t 0 ]; then
+                            log_error "非交互模式下未提供有效 SSH 公钥，无法继续"
+                            return 1
+                        fi
                         continue
                     fi
                 else
