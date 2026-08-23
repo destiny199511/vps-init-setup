@@ -160,8 +160,13 @@ validate_install_dir() {
     fi
 
     if [ -d "$INSTALL_DIR" ]; then
-        install_owner="$(stat -c '%u' "$INSTALL_DIR" 2>/dev/null || true)"
-        install_mode="$(stat -c '%a' "$INSTALL_DIR" 2>/dev/null || true)"
+        # Ensure directory is owned by root and has safe permissions (0755)
+        chown root:root "$INSTALL_DIR" 2>/dev/null || true
+        chmod 755 "$INSTALL_DIR" 2>/dev/null || true
+
+        install_owner="$(stat -c '%u' "$INSTALL_DIR" 2>/dev/null || stat -f '%u' "$INSTALL_DIR" 2>/dev/null || true)"
+        install_mode="$(stat -c '%a' "$INSTALL_DIR" 2>/dev/null || stat -f '%Lp' "$INSTALL_DIR" 2>/dev/null || true)"
+        install_mode="${install_mode#0}"
         if [ "$install_owner" != "0" ] || [ -z "$install_mode" ] || (( (8#$install_mode) & 022 )); then
             echo "Install directory must be owned by root and not group/world writable: $INSTALL_DIR"
             exit 1
@@ -316,7 +321,8 @@ else
         ! -name config ! -name logs ! -name backups ! -name "$INSTALL_MARKER" \
         -exec rm -rf -- {} +
     cp -a --no-preserve=ownership "$extracted_dir/." "$INSTALL_DIR/"
-    chown root:root "$INSTALL_DIR"
+    chown -R root:root "$INSTALL_DIR" 2>/dev/null || true
+    chmod 755 "$INSTALL_DIR" 2>/dev/null || true
 fi
 
 cd "$INSTALL_DIR"
