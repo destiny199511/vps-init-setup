@@ -33,7 +33,7 @@ DRY_RUN=false
 FORCE_MODE=false
 FORCE=false
 AUTO_YES="${AUTO_YES:-false}"
-ACTION="install" # install, rollback, status
+ACTION="install" # install, rollback, status, health
 SELECTED_MODULES=() # 如果为空则表示所有模块
 CONFIG_FILE="${CONFIG_DIR}/vps_config.conf"
 WIZARD_TOTAL_STEPS=7
@@ -855,9 +855,45 @@ run_configuration_wizard() {
     done
 
     print_section "配置采集完成"
-    echo -e "所有 ${total_steps} 个步骤已完成！系统已更新配置。"
+    echo -e "所有 ${total_steps} 个步骤已完成。接下来可在总览中直接修改任一配置段。"
     echo -e "${GREEN}═══════════════════════════════════════════${NC}"
-    return 0
+    configuration_review_loop
+}
+
+# Provide a single review surface so users can revise one section without rerunning the wizard.
+configuration_review_loop() {
+    local choice res
+    while true; do
+        print_review_card "${#MODULES[@]}"
+        choice=""
+        menu_select choice "配置总览与调整" "确认配置，或直接进入需要调整的部分：" 1 \
+            "保存并返回主菜单" \
+            "编辑系统基础 (Hostname / Timezone / DNS)" \
+            "编辑用户账户 (User / SSH Key / Password)" \
+            "编辑清理优化 (Swap / Cache / Journal)" \
+            "编辑 SSH 加固 (Port / Root Login)" \
+            "编辑安全组件 (Fail2ban / Auditd / MAC)" \
+            "编辑可选服务 (Docker / Node.js)" \
+            "编辑备份与监控 (Backup / Monitoring)" \
+            "返回主菜单（不保存配置文件）" || return 2
+
+        res=0
+        case "$choice" in
+            "保存并返回"*)
+                save_config "$CONFIG_FILE" $(get_config_var_names)
+                return 0
+                ;;
+            "编辑系统"*) configure_system || res=$? ;;
+            "编辑用户"*) configure_user || res=$? ;;
+            "编辑清理"*) configure_cleanup || res=$? ;;
+            "编辑 SSH"*) configure_ssh || res=$? ;;
+            "编辑安全"*) configure_security || res=$? ;;
+            "编辑可选"*) configure_services || res=$? ;;
+            "编辑备份"*) configure_backup_monitoring || res=$? ;;
+            "返回主菜单"*) return 2 ;;
+        esac
+        [ "$res" -eq 2 ] && echo -e "\n${YELLOW}<< 已取消本段修改，配置保持不变。${NC}"
+    done
 }
 
 # 模块化分项配置子菜单
@@ -941,6 +977,7 @@ show_main_menu() {
                 "加载 / 重置配置 (Manage Config File)  [重置或重新读取]"
                 "开始执行安装 (Start Installation)     [确认并立即执行]"
                 "查看模块状态 (Check Module Status)    [查询完成清单]"
+                "查看配置体检报告 (Health Report)       [核验实际生效状态]"
                 "退出装机向导 (Exit Setup Wizard)      [退出程序]"
             )
             local item_choice=""
@@ -953,8 +990,9 @@ show_main_menu() {
                 "模块化"*) choice="2" ;;
                 "预览"*) choice="3" ;;
                 "加载"*) choice="4" ;;
+                "配置体检"*) choice="7" ;;
+                "查看模块"*) choice="6" ;;
                 "开始"*) choice="5" ;;
-                "查看"*) choice="6" ;;
                 "退出"*) choice="0" ;;
                 *) choice="1" ;;
             esac
@@ -967,10 +1005,11 @@ show_main_menu() {
             echo -e "  \033[1;36m│\033[0m   4) 加载 / 重置配置文件 (Manage Config File)"
             echo -e "  \033[1;36m│\033[0m   5) 开始执行安装 (Start Installation)"
             echo -e "  \033[1;36m│\033[0m   6) 查看模块执行状态 (Check Module Status)"
+            echo -e "  \033[1;36m│\033[0m   7) 查看配置体检报告 (Health Report)"
             echo -e "  \033[1;36m│\033[0m   0) 退出程序 (Exit)"
             echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
-            read -r -p "  请选择 [0-6] (默认: 1): " choice
+            read -r -p "  请选择 [0-7] (默认: 1): " choice
             choice="${choice:-1}"
         fi
 
@@ -1011,6 +1050,12 @@ show_main_menu() {
                 ;;
             6)
                 print_status_table MODULES
+                if tui_is_supported; then
+                    read -rp "按任意键返回主菜单..." -n1
+                fi
+                ;;
+            7)
+                show_latest_health_report
                 if tui_is_supported; then
                     read -rp "按任意键返回主菜单..." -n1
                 fi
@@ -1121,12 +1166,14 @@ while [[ $# -gt 0 ]]; do
   --modules <list>        仅执行指定模块，逗号分隔 (例如: 01_hostname,05_ssh)
   --rollback              回滚已完成的更改（恢复备份的配置文件）
   --status                显示各模块的执行状态
+    --health                查看最近一次配置体检报告
 
 示例:
   sudo $0                 # 交互式向导
   sudo $0 -n -d           # 非交互试运行
   sudo $0 -a              # 全自动默认配置安装
   sudo $0 --status        # 查看模块状态
+    sudo $0 --health        # 查看最近配置体检报告
 EOF
             exit 0
             ;;
@@ -1166,6 +1213,10 @@ EOF
             ACTION="status"
             shift
             ;;
+        --health)
+            ACTION="health"
+            shift
+            ;;
         *)
             echo "未知选项: $1"
             echo "使用 -h 查看帮助"
@@ -1181,6 +1232,8 @@ export FORCE
 MODE_LABEL="交互式配置向导"
 if [ "$ACTION" = "status" ]; then
     MODE_LABEL="状态查询"
+elif [ "$ACTION" = "health" ]; then
+    MODE_LABEL="配置体检报告"
 elif [ "$ACTION" = "rollback" ]; then
     MODE_LABEL="回滚"
 elif [ "$DRY_RUN" = true ] && [ "$NON_INTERACTIVE" = true ]; then
@@ -1232,6 +1285,10 @@ case "$ACTION" in
     status)
         print_status_table MODULES
         exit 0
+        ;;
+    health)
+        show_latest_health_report
+        exit $?
         ;;
     rollback)
         log_info "开始回滚操作..."
@@ -1399,8 +1456,13 @@ ELAPSED=$((END_TIME - START_TIME))
 
 MODULE_SUMMARY_LINES+=$'\n'"  合计: ${GREEN}✓ ${DONE_COUNT}${NC}  ${RED}✗ ${FAILED_COUNT}${NC}  ${YELLOW}~ ${SKIPPED_COUNT}${NC}"
 
-# 探测 IP 并写结果文件
+# 探测 IP、生成体检报告并写结果文件
 SERVER_IP="$(detect_server_ip || true)"
+HEALTH_CHECK_FAILED=false
+if ! print_health_report "$DRY_RUN"; then
+    HEALTH_CHECK_FAILED=true
+    log_warn "配置体检发现偏差，请查看报告并按日志排查。"
+fi
 if [ "$DRY_RUN" = false ]; then
     write_install_result "${INSTALL_RESULT_FILE}" "${SERVER_IP}" "${ELAPSED}"
 fi
@@ -1408,7 +1470,7 @@ fi
 # 完成卡片
 print_completion_card "${ELAPSED}" "${DRY_RUN}" "${SERVER_IP}" "${MODULE_SUMMARY_LINES}"
 
-if [ "$FAILED_COUNT" -gt 0 ] && [ "$DRY_RUN" = false ]; then
+if { [ "$FAILED_COUNT" -gt 0 ] || [ "$HEALTH_CHECK_FAILED" = true ]; } && [ "$DRY_RUN" = false ]; then
     exit 1
 fi
 

@@ -831,6 +831,7 @@ write_install_result() {
         printf 'VPS_SETUP_SSH_COMMAND=%q\n' "ssh -p ${SSH_PORT:-22} ${USERNAME:-root}@${server_ip:-SERVER_IP}"
         printf 'VPS_SETUP_LOG_FILE=%q\n' "${LOG_FILE}"
         printf 'VPS_SETUP_CONFIG_FILE=%q\n' "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
+        printf 'VPS_SETUP_HEALTH_REPORT_FILE=%q\n' "${HEALTH_REPORT_FILE:-}"
         printf 'VPS_SETUP_ELAPSED_SECONDS=%q\n' "${elapsed}"
         printf 'VPS_SETUP_INSTALL_DOCKER=%q\n' "${INSTALL_DOCKER:-}"
         printf 'VPS_SETUP_INSTALL_FAIL2BAN=%q\n' "${INSTALL_FAIL2BAN:-}"
@@ -1009,6 +1010,110 @@ print_actual_vps_status() {
     print_kv "Docker 状态:" "$ACTUAL_DOCKER"
     print_kv "Fail2ban 状态:" "$ACTUAL_FAIL2BAN"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
+}
+
+# print_health_report: compare the requested configuration with live system state.
+print_health_report() {
+    local dry_run="${1:-false}"
+    local report_file="${HEALTH_REPORT_FILE:-${LOGS_DIR}/health_report_$(date +%Y%m%d_%H%M%S).txt}"
+    local report_tmp expected actual
+    local passed=0 warned=0 failed=0
+
+    HEALTH_REPORT_FILE="$report_file"
+    export HEALTH_REPORT_FILE
+    report_tmp="$(mktemp "${LOGS_DIR}/.health_report.XXXXXX")"
+
+    health_item() {
+        local status="$1" label="$2" wanted="$3" observed="$4"
+        local icon color
+        case "$status" in
+            pass) icon="✔"; color="${GREEN}"; passed=$((passed + 1)) ;;
+            warn) icon="!"; color="${YELLOW}"; warned=$((warned + 1)) ;;
+            *) icon="✖"; color="${RED}"; failed=$((failed + 1)) ;;
+        esac
+        printf "  \033[1;36m│\033[0m  ${color}%s\033[0m \033[1;37m%-18s\033[0m \033[2;37m目标: %s | 实际: %s\033[0m\n" \
+            "$icon" "$label" "$wanted" "$observed"
+        printf '[%s] %s | expected: %s | actual: %s\n' "$status" "$label" "$wanted" "$observed" >> "$report_tmp"
+    }
+
+    print_section "配置体检报告 / Configuration Health Report"
+    if [ "$dry_run" = true ]; then
+        echo -e "  \033[1;36m│\033[0m  \033[1;33m! 试运行未修改系统，以下仅显示当前环境，未做配置判定。\033[0m"
+        printf 'VPS Setup Configuration Health Report\nMode: dry-run (no live validation)\nGenerated: %s\n' "$(date -Is)" > "$report_tmp"
+        health_item warn "执行模式" "配置已应用" "试运行，未应用变更"
+    else
+        printf 'VPS Setup Configuration Health Report\nGenerated: %s\n\n' "$(date -Is)" > "$report_tmp"
+        collect_actual_vps_status
+
+        if health_should_check_module "01_hostname"; then
+            [ "$ACTUAL_HOSTNAME" = "${HOSTNAME:-}" ] && health_item pass "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME" || health_item fail "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME"
+        fi
+        if health_should_check_module "02_locale_timezone"; then
+            [ "$ACTUAL_TIMEZONE" = "${TIMEZONE:-}" ] && health_item pass "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE" || health_item fail "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE"
+            case "$ACTUAL_LOCALE" in
+                "${LOCALE:-}"*) health_item pass "语言环境" "${LOCALE:-}" "$ACTUAL_LOCALE" ;;
+                *) health_item warn "语言环境" "${LOCALE:-}" "$ACTUAL_LOCALE" ;;
+            esac
+        fi
+        if health_should_check_module "04_user"; then
+            id "${USERNAME:-}" >/dev/null 2>&1 && health_item pass "管理用户" "${USERNAME:-}" "$ACTUAL_USER" || health_item fail "管理用户" "${USERNAME:-}" "$ACTUAL_USER"
+        fi
+        if health_should_check_module "05_ssh"; then
+            [ "$ACTUAL_SSH_SERVICE" = "active" ] && health_item pass "SSH 服务" "active" "$ACTUAL_SSH_SERVICE" || health_item fail "SSH 服务" "active" "$ACTUAL_SSH_SERVICE"
+            if printf '%s\n' "$ACTUAL_SSH_PORTS" | tr ',' '\n' | sed 's/^.*://' | grep -qx "${SSH_PORT:-22}"; then
+                health_item pass "SSH 端口" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
+            else
+                health_item fail "SSH 端口" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
+            fi
+        fi
+        if health_should_check_module "06_firewall"; then
+            case "$ACTUAL_FIREWALL" in
+                none|unknown|*inactive*) health_item fail "防火墙" "已启用" "$ACTUAL_FIREWALL" ;;
+                *) health_item pass "防火墙" "已启用" "$ACTUAL_FIREWALL" ;;
+            esac
+        fi
+
+        if [ "${INSTALL_DOCKER:-false}" = "true" ] && health_should_check_module "08_docker"; then
+            [ "$ACTUAL_DOCKER" = "active" ] && health_item pass "Docker" "active" "$ACTUAL_DOCKER" || health_item fail "Docker" "active" "$ACTUAL_DOCKER"
+        fi
+        if [ "${INSTALL_FAIL2BAN:-false}" = "true" ] && health_should_check_module "07_fail2ban"; then
+            [ "$ACTUAL_FAIL2BAN" = "active" ] && health_item pass "Fail2ban" "active" "$ACTUAL_FAIL2BAN" || health_item fail "Fail2ban" "active" "$ACTUAL_FAIL2BAN"
+        fi
+        if [ "${FAILED_COUNT:-0}" -eq 0 ]; then
+            health_item pass "模块执行" "无失败模块" "失败 ${FAILED_COUNT:-0}"
+        else
+            health_item fail "模块执行" "无失败模块" "失败 ${FAILED_COUNT:-0}"
+        fi
+    fi
+
+    printf '\nSummary: pass=%s warn=%s fail=%s\n' "$passed" "$warned" "$failed" >> "$report_tmp"
+    mv -f "$report_tmp" "$report_file"
+    chmod 600 "$report_file" 2>/dev/null || true
+    printf "  \033[1;36m│\033[0m  \033[1;37m结果:\033[0m ${GREEN}✔ %s 通过\033[0m  ${YELLOW}! %s 提示\033[0m  ${RED}✖ %s 失败\033[0m\n" "$passed" "$warned" "$failed"
+    print_kv "报告文件:" "$report_file"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
+
+    [ "$failed" -eq 0 ]
+}
+
+show_latest_health_report() {
+    local report_file
+    report_file="$(find "${LOGS_DIR}" -maxdepth 1 -type f -name 'health_report_*.txt' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)"
+    if [ -z "$report_file" ] || [ ! -f "$report_file" ]; then
+        msg_box "配置体检报告" "尚未生成体检报告。请先完成一次非试运行安装。"
+        return 1
+    fi
+    print_section "最近配置体检报告"
+    sed 's/^/  │  /' "$report_file"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
+}
+
+health_should_check_module() {
+    local module_name="$1" module
+    for module in "${MODULES_TO_RUN[@]:-}"; do
+        [ "${module%%:*}" = "$module_name" ] && return 0
+    done
+    [ "$(state_get "$module_name")" = "done" ]
 }
 
 # print_status_table: 美化模块状态表
