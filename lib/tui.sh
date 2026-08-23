@@ -98,7 +98,7 @@ tui_menu_select() {
         local idx=1
         for opt in "${options[@]}"; do
             if [ "$idx" -eq "$default_idx" ]; then
-                echo -e "  \033[1;36m${idx})\033[0m \033[1;37;48;5;236m $((i + 1)). ${opt} \033[0m $([ "$((i + 1))" -eq "$default_idx" ] && echo -e "\033[38;5;243m[默认]\033[0m")"
+                echo -e "  \033[1;36m${idx})\033[0m \033[1;37;48;5;236m ${opt} \033[0m \033[38;5;243m[默认]\033[0m"
             else
                 echo -e "  \033[2;37m${idx})\033[0m ${opt}"
             fi
@@ -107,7 +107,10 @@ tui_menu_select() {
         echo -e "  \033[2;37mb)\033[0m \033[2;37m返回上一步\033[0m"
         while true; do
             local choice
-            read -r -p "请选择 [1-$num_options] (默认: $default_idx, 输入 b 返回): " choice
+            # read returns non-zero on EOF (piped stdin exhausted) — treat as cancel
+            if ! read -r -p "请选择 [1-$num_options] (默认: $default_idx, 输入 b 返回): " choice; then
+                return 2
+            fi
             choice="${choice:-$default_idx}"
             [ "$choice" = "b" ] || [ "$choice" = "back" ] && return 2
             if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$num_options" ]; then
@@ -213,7 +216,10 @@ tui_yesno_box() {
         [ -n "$prompt" ] && echo -e "  \033[2;37m${prompt}\033[0m"
         while true; do
             local ans
-            read -r -p "  请选择 [1=是, 2=否, b=返回] (默认: $default_idx): " ans
+            # read returns non-zero on EOF (piped stdin exhausted) — treat as cancel
+            if ! read -r -p "  请选择 [1=是, 2=否, b=返回] (默认: $default_idx): " ans; then
+                return 2
+            fi
             if [ "$ans" = "b" ] || [ "$ans" = "back" ]; then
                 return 2
             fi
@@ -308,6 +314,28 @@ tui_card_input() {
     local subtitle="${5:-}"
     local is_password="${6:-false}"
 
+    if ! tui_is_supported; then
+        if [ "${NON_INTERACTIVE:-false}" = "true" ] || [ "${AUTO_YES:-false}" = "true" ]; then
+            printf -v "$__var" '%s' "$default"
+            return 0
+        fi
+        local fallback_answer
+        if [ "$is_password" = "true" ]; then
+            if ! read -rsp "$prompt (输入 b 返回): " fallback_answer; then
+                echo ""
+                return 2
+            fi
+            echo ""
+        elif ! read -r -p "$prompt [默认: $default] (输入 b 返回): " fallback_answer; then
+            return 2
+        fi
+        if [ "$fallback_answer" = "b" ] || [ "$fallback_answer" = "back" ]; then
+            return 2
+        fi
+        printf -v "$__var" '%s' "${fallback_answer:-$default}"
+        return 0
+    fi
+
     echo ""
     echo -e "  \033[1;36m◆ ${title}\033[0m"
     if [ -n "$subtitle" ]; then
@@ -325,10 +353,15 @@ tui_card_input() {
     stty echo icanon 2>/dev/null || true
 
     if [ "$is_password" = "true" ]; then
-        read -rsp "$(echo -e "$prompt_label")" answer
+        if ! read -rsp "$(echo -e "$prompt_label")" answer; then
+            echo ""
+            return 2
+        fi
         echo ""
     else
-        read -re -p "$(echo -e "$prompt_label")" answer
+        if ! read -re -p "$(echo -e "$prompt_label")" answer; then
+            return 2
+        fi
     fi
 
     if [ "$answer" = "b" ] || [ "$answer" = "back" ]; then

@@ -97,6 +97,33 @@ test_tui_noninteractive_fallback() {
     ) || fail "TUI non-interactive fallback"
 }
 
+test_tui_eof_cancellation() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source lib/tui.sh
+        NON_INTERACTIVE=false
+        AUTO_YES=false
+        local value
+        if tui_menu_select value "Test" "Test prompt" 1 "first" "second" </dev/null >/dev/null; then
+            return 1
+        else
+            [ "$?" -eq 2 ]
+        fi
+        if tui_yesno_box "Test" "Test prompt" "y" </dev/null >/dev/null; then
+            return 1
+        else
+            [ "$?" -eq 2 ]
+        fi
+        if tui_card_input value "Test" "Test prompt" "default-value" "" false </dev/null >/dev/null; then
+            return 1
+        else
+            [ "$?" -eq 2 ]
+        fi
+    ) || fail "TUI EOF cancellation"
+}
+
 test_apt_lock_wait_guard() {
     (
         cd "$ROOT_DIR"
@@ -114,6 +141,7 @@ test_access_guard
 test_module_source_guard
 test_tui_engine_load
 test_tui_noninteractive_fallback
+test_tui_eof_cancellation
 test_apt_lock_wait_guard
 test_unsafe_install_dir_guard
 printf 'Regression checks passed.\n'

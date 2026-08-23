@@ -296,7 +296,11 @@ else
     trap 'rm -rf "$tmp_dir"' EXIT
 
     echo "Installing release ${release_tag} from ${archive_url}"
-    curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz"
+    if ! curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz"; then
+        echo "Failed to download release archive: $archive_url"
+        echo "Check the repository URL, release reference, and network connection."
+        exit 1
+    fi
     verify_release_checksum "$tmp_dir/source.tar.gz" "$archive_url"
     if tar -tzf "$tmp_dir/source.tar.gz" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
         echo "Downloaded release contains unsafe archive paths; refusing to extract it."
