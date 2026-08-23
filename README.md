@@ -101,6 +101,42 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
 
 ---
 
+## 查看实际 VPS 环境
+
+配置执行完成后，可通过以下方式核验实际生效状态：
+
+### 1. 体检报告（推荐）
+
+对比“目标配置 vs 实际状态”，逐项给出 ✔ 通过 / ! 提示 / ✖ 失败：
+
+```bash
+sudo ./vps_setup.sh --health
+```
+
+报告文件同时持久化到 `logs/health_report_*.txt`，方便归档或 CI 检查。
+
+### 2. 模块执行状态清单
+
+查看各模块是已完成、已跳过还是失败：
+
+```bash
+sudo ./vps_setup.sh --status
+```
+
+### 3. 安装结果凭据
+
+包含 SSH 登录命令、关键配置摘要的可 source 文件：
+
+```bash
+cat config/install-result.env
+```
+
+### 4. 实时状态卡片
+
+每次执行收尾时会自动打印 “VPS 实际生效状态 / Live System State” 卡片，显示当前主机名、时区、语言、SSH 端口、防火墙、Swap、Docker、Fail2ban 的真实状态。
+
+---
+
 ## 功能模块列表
 
 | 序号 | 模块名称 | 核心功能说明 |
@@ -136,6 +172,7 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
   --modules <list>        仅执行指定模块，逗号分隔 (例: 01_hostname,05_ssh)
   --rollback              回滚已完成的更改（恢复备份的配置文件）
   --status                显示各模块的执行状态
+  --health                查看最近一次配置体检报告
 ```
 
 ---
