@@ -981,7 +981,7 @@ show_main_menu() {
                 "退出装机向导 (Exit Setup Wizard)      [退出程序]"
             )
             local item_choice=""
-            if ! tui_menu_select item_choice "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单" "请选择操作模式 (↑/↓ 移动, Enter 确认, 1-7 秒选):" 1 "${menu_items[@]}"; then
+            if ! tui_menu_select item_choice "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单" "请选择操作模式 (↑/↓ 移动, Enter 确认, 1-8 秒选):" 1 "${menu_items[@]}"; then
                 log_info "用户取消退出系统。"
                 exit 0
             fi
@@ -1095,8 +1095,10 @@ confirm_configuration_review() {
 }
 
 module_requires_runtime_check() {
+    # These modules are idempotent and cheap; always run them so config drift
+    # (e.g. timezone/locale changed after an earlier run) gets re-applied.
     case "$1" in
-        05_ssh|06_firewall|07_fail2ban) return 0 ;;
+        01_hostname|02_locale_timezone|05_ssh|06_firewall|07_fail2ban) return 0 ;;
         *) return 1 ;;
     esac
 }

@@ -885,9 +885,9 @@ print_completion_card() {
     print_kv "密码认证登录:" "${PASSWORD_AUTH:-}"
     if [[ -n "${server_ip}" ]]; then
         print_kv "服务器公网 IP:" "${server_ip}"
-        print_kv "SSH 登录命令:" "\033[1;32mssh -p ${SSH_PORT:-22} ${USERNAME:-root}@${server_ip}\033[0m"
+        print_kv "SSH 登录命令:" "$(printf '\033[1;32mssh -p %s %s@%s\033[0m' "${SSH_PORT:-22}" "${USERNAME:-root}" "${server_ip}")"
     else
-        print_kv "SSH 登录命令:" "\033[1;32mssh -p ${SSH_PORT:-22} ${USERNAME:-root}@SERVER_IP\033[0m"
+        print_kv "SSH 登录命令:" "$(printf '\033[1;32mssh -p %s %s@SERVER_IP\033[0m' "${SSH_PORT:-22}" "${USERNAME:-root}")"
     fi
     print_kv "Fail2ban 防爆破:" "${INSTALL_FAIL2BAN:-}"
     print_kv "Docker 容器引擎:" "${INSTALL_DOCKER:-}"
@@ -1087,9 +1087,18 @@ print_health_report() {
     fi
 
     printf '\nSummary: pass=%s warn=%s fail=%s\n' "$passed" "$warned" "$failed" >> "$report_tmp"
+    if [ "$failed" -gt 0 ] || [ "$warned" -gt 0 ]; then
+        {
+            printf '\nSuggested fix (re-run the affected modules):\n'
+            printf '  sudo %s/vps_setup.sh -n -f --modules 02_locale_timezone\n' "${SCRIPT_ROOT:-/opt/vps-init-setup}"
+        } >> "$report_tmp"
+    fi
     mv -f "$report_tmp" "$report_file"
     chmod 600 "$report_file" 2>/dev/null || true
     printf "  \033[1;36m│\033[0m  \033[1;37m结果:\033[0m ${GREEN}✔ %s 通过\033[0m  ${YELLOW}! %s 提示\033[0m  ${RED}✖ %s 失败\033[0m\n" "$passed" "$warned" "$failed"
+    if [ "$failed" -gt 0 ] || [ "$warned" -gt 0 ]; then
+        echo -e "  \033[1;36m│\033[0m  \033[1;33m修复建议:\033[0m \033[1;37msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules 02_locale_timezone\033[0m"
+    fi
     print_kv "报告文件:" "$report_file"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
 
