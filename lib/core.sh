@@ -1036,6 +1036,10 @@ print_health_report() {
         printf '[%s] %s | expected: %s | actual: %s\n' "$status" "$label" "$wanted" "$observed" >> "$report_tmp"
     }
 
+    # Track which modules need re-running based on failed/warned checks.
+    local fix_modules=()
+    add_fix_module() { case " ${fix_modules[*]-} " in *" $1 "*) ;; *) fix_modules+=("$1") ;; esac; }
+
     print_section "配置体检报告 / Configuration Health Report"
     if [ "$dry_run" = true ]; then
         echo -e "  \033[1;36m│\033[0m  \033[1;33m! 试运行未修改系统，以下仅显示当前环境，未做配置判定。\033[0m"
@@ -1046,38 +1050,78 @@ print_health_report() {
         collect_actual_vps_status
 
         if health_should_check_module "01_hostname"; then
-            [ "$ACTUAL_HOSTNAME" = "${HOSTNAME:-}" ] && health_item pass "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME" || health_item fail "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME"
+            [ "$ACTUAL_HOSTNAME" = "${HOSTNAME:-}" ] && health_item pass "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME" || { health_item fail "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME"; add_fix_module "01_hostname"; }
         fi
         if health_should_check_module "02_locale_timezone"; then
-            [ "$ACTUAL_TIMEZONE" = "${TIMEZONE:-}" ] && health_item pass "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE" || health_item fail "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE"
+            [ "$ACTUAL_TIMEZONE" = "${TIMEZONE:-}" ] && health_item pass "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE" || { health_item fail "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE"; add_fix_module "02_locale_timezone"; }
             case "$ACTUAL_LOCALE" in
                 "${LOCALE:-}"*) health_item pass "语言环境" "${LOCALE:-}" "$ACTUAL_LOCALE" ;;
-                *) health_item warn "语言环境" "${LOCALE:-}" "$ACTUAL_LOCALE" ;;
+                *) health_item warn "语言环境" "${LOCALE:-}" "$ACTUAL_LOCALE"; add_fix_module "02_locale_timezone" ;;
             esac
         fi
         if health_should_check_module "04_user"; then
-            id "${USERNAME:-}" >/dev/null 2>&1 && health_item pass "管理用户" "${USERNAME:-}" "$ACTUAL_USER" || health_item fail "管理用户" "${USERNAME:-}" "$ACTUAL_USER"
+            id "${USERNAME:-}" >/dev/null 2>&1 && health_item pass "管理用户" "${USERNAME:-}" "$ACTUAL_USER" || { health_item fail "管理用户" "${USERNAME:-}" "$ACTUAL_USER"; add_fix_module "04_user"; }
         fi
         if health_should_check_module "05_ssh"; then
-            [ "$ACTUAL_SSH_SERVICE" = "active" ] && health_item pass "SSH 服务" "active" "$ACTUAL_SSH_SERVICE" || health_item fail "SSH 服务" "active" "$ACTUAL_SSH_SERVICE"
+            [ "$ACTUAL_SSH_SERVICE" = "active" ] && health_item pass "SSH 服务" "active" "$ACTUAL_SSH_SERVICE" || { health_item fail "SSH 服务" "active" "$ACTUAL_SSH_SERVICE"; add_fix_module "05_ssh"; }
             if printf '%s\n' "$ACTUAL_SSH_PORTS" | tr ',' '\n' | sed 's/^.*://' | grep -qx "${SSH_PORT:-22}"; then
                 health_item pass "SSH 端口" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
             else
                 health_item fail "SSH 端口" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
+                add_fix_module "05_ssh"
             fi
         fi
         if health_should_check_module "06_firewall"; then
             case "$ACTUAL_FIREWALL" in
-                none|unknown|*inactive*) health_item fail "防火墙" "已启用" "$ACTUAL_FIREWALL" ;;
+                none|unknown|*inactive*) health_item fail "防火墙" "已启用" "$ACTUAL_FIREWALL"; add_fix_module "06_firewall" ;;
                 *) health_item pass "防火墙" "已启用" "$ACTUAL_FIREWALL" ;;
             esac
+            # Deep validation: default-deny policy and no unconstrained allow rules.
+            # Skip silently when rules are unreadable (non-root / no iptables backend).
+            if command -v iptables >/dev/null 2>&1 && [ -n "$(iptables -S INPUT 2>/dev/null)" ]; then
+                local input_policy unconstrained_all
+                input_policy="$(iptables -S INPUT 2>/dev/null | head -n1 | sed 's/-P INPUT //')"
+                case "$input_policy" in
+                    DROP|REJECT) health_item pass "INPUT 默认策略" "DROP" "$input_policy" ;;
+                    *) health_item fail "INPUT 默认策略" "DROP" "$input_policy"; add_fix_module "06_firewall" ;;
+                esac
+                # An ACCEPT rule with no match criteria lets all traffic bypass the policy.
+                unconstrained_all="$(iptables -S INPUT 2>/dev/null | grep -cE '^-A INPUT (-j|--jump) ACCEPT[[:space:]]*$' || true)"
+                if [ "${unconstrained_all:-0}" -eq 0 ]; then
+                    health_item pass "放行规则质量" "无无条件放行" "未发现无条件 ACCEPT"
+                else
+                    health_item fail "放行规则质量" "无无条件放行" "发现 ${unconstrained_all} 条无条件 ACCEPT"
+                    add_fix_module "06_firewall"
+                fi
+                # Lockout guard: when policy drops by default, an SSH allow rule must exist.
+                local ssh_allowed=false port_num
+                if [ "$input_policy" = "DROP" ] || [ "$input_policy" = "REJECT" ]; then
+                    for port_num in $(printf '%s\n' "$ACTUAL_SSH_PORTS" | tr ',' '\n' | sed 's/^.*://' | grep -E '^[0-9]+$'); do
+                        if iptables -S INPUT 2>/dev/null | grep -qE -- "-p tcp .*--dport ${port_num} .* ACCEPT"; then
+                            ssh_allowed=true
+                            break
+                        fi
+                    done
+                    if [ "$ssh_allowed" = true ]; then
+                        health_item pass "SSH 防火墙放行" "SSH 端口已放行" "存在 SSH 放行规则"
+                    else
+                        health_item fail "SSH 防火墙放行" "SSH 端口已放行" "DROP 策略下未找到 SSH 放行规则"
+                        add_fix_module "06_firewall"
+                    fi
+                fi
+            fi
+            # Migration guard: legacy SSH port kept open on purpose, but must be visible.
+            if [ "${SSH_KEEP_LEGACY_PORT:-false}" = "true" ] && [ "${SSH_PORT:-22}" != "22" ] && \
+               printf '%s\n' "$ACTUAL_SSH_PORTS" | tr ',' '\n' | sed 's/^.*://' | grep -qx "22"; then
+                health_item warn "旧 SSH 端口 22" "迁移后关闭" "仍开放（SSH_KEEP_LEGACY_PORT=true）"
+            fi
         fi
 
         if [ "${INSTALL_DOCKER:-false}" = "true" ] && health_should_check_module "08_docker"; then
-            [ "$ACTUAL_DOCKER" = "active" ] && health_item pass "Docker" "active" "$ACTUAL_DOCKER" || health_item fail "Docker" "active" "$ACTUAL_DOCKER"
+            [ "$ACTUAL_DOCKER" = "active" ] && health_item pass "Docker" "active" "$ACTUAL_DOCKER" || { health_item fail "Docker" "active" "$ACTUAL_DOCKER"; add_fix_module "08_docker"; }
         fi
         if [ "${INSTALL_FAIL2BAN:-false}" = "true" ] && health_should_check_module "07_fail2ban"; then
-            [ "$ACTUAL_FAIL2BAN" = "active" ] && health_item pass "Fail2ban" "active" "$ACTUAL_FAIL2BAN" || health_item fail "Fail2ban" "active" "$ACTUAL_FAIL2BAN"
+            [ "$ACTUAL_FAIL2BAN" = "active" ] && health_item pass "Fail2ban" "active" "$ACTUAL_FAIL2BAN" || { health_item fail "Fail2ban" "active" "$ACTUAL_FAIL2BAN"; add_fix_module "07_fail2ban"; }
         fi
         if [ "${FAILED_COUNT:-0}" -eq 0 ]; then
             health_item pass "模块执行" "无失败模块" "失败 ${FAILED_COUNT:-0}"
@@ -1087,17 +1131,18 @@ print_health_report() {
     fi
 
     printf '\nSummary: pass=%s warn=%s fail=%s\n' "$passed" "$warned" "$failed" >> "$report_tmp"
-    if [ "$failed" -gt 0 ] || [ "$warned" -gt 0 ]; then
+    if [ ${#fix_modules[@]} -gt 0 ]; then
+        local fix_cmd="sudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules $(IFS=','; echo "${fix_modules[*]}")"
         {
             printf '\nSuggested fix (re-run the affected modules):\n'
-            printf '  sudo %s/vps_setup.sh -n -f --modules 02_locale_timezone\n' "${SCRIPT_ROOT:-/opt/vps-init-setup}"
+            printf '  %s\n' "$fix_cmd"
         } >> "$report_tmp"
     fi
     mv -f "$report_tmp" "$report_file"
     chmod 600 "$report_file" 2>/dev/null || true
     printf "  \033[1;36m│\033[0m  \033[1;37m结果:\033[0m ${GREEN}✔ %s 通过\033[0m  ${YELLOW}! %s 提示\033[0m  ${RED}✖ %s 失败\033[0m\n" "$passed" "$warned" "$failed"
-    if [ "$failed" -gt 0 ] || [ "$warned" -gt 0 ]; then
-        echo -e "  \033[1;36m│\033[0m  \033[1;33m修复建议:\033[0m \033[1;37msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules 02_locale_timezone\033[0m"
+    if [ ${#fix_modules[@]} -gt 0 ]; then
+        echo -e "  \033[1;36m│\033[0m  \033[1;33m修复建议:\033[0m \033[1;37msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules $(IFS=','; echo "${fix_modules[*]}")\033[0m"
     fi
     print_kv "报告文件:" "$report_file"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
