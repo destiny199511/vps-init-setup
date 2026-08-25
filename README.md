@@ -3,6 +3,8 @@
 [![Shell](https://img.shields.io/badge/shell-bash-grey)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 
+[English](README.en.md) | **中文** | [日本語](README.ja.md) | [Español](README.es.md)
+
 面向 Linux VPS 的初始化与安全加固脚本。它通过交互式向导或配置文件完成用户、SSH、防火墙、Docker、备份、监控和系统优化等常用配置。
 
 ## 开始使用
