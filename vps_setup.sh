@@ -1111,7 +1111,15 @@ validate_access_configuration() {
     #   2. A new user will be created and it will have credentials configured.
     local current_user
     current_user="${SUDO_USER:-${USER:-$(whoami)}}"
-    local configured_user="${USERNAME:-}"
+    # Only treat USERNAME as "configured" if it came from env or a config file,
+    # not the built-in default. This lets the guard target the real account on
+    # cloud VMs (ubuntu/ec2-user) instead of the placeholder default.
+    local configured_user=""
+    if [ -n "${VPS_SETUP_USERNAME:-}" ]; then
+        configured_user="$VPS_SETUP_USERNAME"
+    elif [ -n "${USERNAME:-}" ] && [ -f "$CONFIG_FILE" ] && grep -q "^USERNAME=" "$CONFIG_FILE" 2>/dev/null; then
+        configured_user="$USERNAME"
+    fi
     local username="${configured_user:-$current_user}"
 
     local password_enabled="${PASSWORD_AUTH:-no}"
