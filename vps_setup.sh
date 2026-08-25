@@ -1104,7 +1104,16 @@ module_requires_runtime_check() {
 }
 
 validate_access_configuration() {
-    local username="${USERNAME:-appadmin}"
+    # Check that SSH access will remain usable after the run.
+    # Two cases are safe:
+    #   1. The current login user already has working pubkey/password auth
+    #      (proven by the fact that this very session is connected).
+    #   2. A new user will be created and it will have credentials configured.
+    local current_user
+    current_user="${SUDO_USER:-${USER:-$(whoami)}}"
+    local configured_user="${USERNAME:-}"
+    local username="${configured_user:-$current_user}"
+
     local password_enabled="${PASSWORD_AUTH:-no}"
     local pubkey_enabled="${SSH_PUBKEY_AUTHENTICATION:-${SSH_PUBKEY_AUTH:-no}}"
     local has_password=false
@@ -1133,13 +1142,21 @@ validate_access_configuration() {
         fi
     fi
 
+    # If the target user exists and already has working auth, the setup is safe
+    # to proceed — SSH hardening never removes existing authorized_keys.
+    if [ "$has_pubkey" = true ] || [ "$has_password" = true ]; then
+        return 0
+    fi
+
+    # Target user doesn't exist yet and no credentials were configured for it.
     if [ "$password_enabled" = "yes" ] && [ "$has_password" != "true" ]; then
         log_error "Password authentication is enabled, but $username has no usable password"
         log_error "Set it with: sudo passwd $username, then rerun the setup"
         return 1
     fi
-    if [ "$pubkey_enabled" = "yes" ] && [ "$has_pubkey" != "true" ] && [ "$password_enabled" != "yes" ]; then
-        log_error "Public-key authentication is enabled, but no authorized SSH public key is available"
+    if [ "$pubkey_enabled" = "yes" ] && [ "$has_pubkey" != "true" ]; then
+        log_error "Public-key authentication is enabled, but no authorized SSH public key is available for $username"
+        log_error "Provide a key via VPS_SETUP_SSH_PUBKEY or set PASSWORD_AUTH=yes"
         return 1
     fi
     if [ "$has_password" != "true" ] && [ "$has_pubkey" != "true" ]; then
