@@ -1148,6 +1148,18 @@ validate_access_configuration() {
         return 0
     fi
 
+    # When no new user is being created and the current SSH user already has
+    # working pubkey auth, the run is safe — the guard only needs to protect
+    # against creating a new account with no way in.
+    if [ -z "$configured_user" ] && [ "$current_user" != "root" ] && id "$current_user" >/dev/null 2>&1; then
+        local current_auth_keys
+        current_auth_keys="$(getent passwd "$current_user" | cut -d: -f6)/.ssh/authorized_keys"
+        if [ -s "$current_auth_keys" ] && grep -qE '^(ssh-|ecdsa-sha2-)' "$current_auth_keys" 2>/dev/null; then
+            log_info "当前用户 $current_user 已有 SSH 公钥认证，允许继续执行"
+            return 0
+        fi
+    fi
+
     # Target user doesn't exist yet and no credentials were configured for it.
     if [ "$password_enabled" = "yes" ] && [ "$has_password" != "true" ]; then
         log_error "Password authentication is enabled, but $username has no usable password"
