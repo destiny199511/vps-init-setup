@@ -21,6 +21,11 @@ BACKUPS_DIR="${SCRIPT_ROOT}/backups"
 MODULES_DIR="${SCRIPT_ROOT}/modules"
 STATE_FILE="${CONFIG_DIR}/.state"
 
+# 加载国际化多语言支持
+if [ -f "${SCRIPT_ROOT}/lib/i18n.sh" ]; then
+    source "${SCRIPT_ROOT}/lib/i18n.sh"
+fi
+
 # 确保核心目录存在
 mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}"
 
@@ -93,14 +98,14 @@ warn_continue() {
 # require_root: 必须root运行
 require_root() {
     if [[ $EUID -ne 0 ]]; then
-        die "此操作必须以root用户运行"
+        die "$(t '此操作必须以root用户运行')"
     fi
 }
 
 # require_non_root: 需普通用户运行
 require_non_root() {
     if [[ $EUID -eq 0 ]]; then
-        die "此操作不应以root用户运行"
+        die "$(t '此操作不应以root用户运行')"
     fi
 }
 
@@ -132,7 +137,7 @@ detect_os() {
     fi
     OS_PRETTY="${OS_PRETTY:-${OS_NAME} ${OS_VERSION_ID}}"
     ARCH="$(uname -m)"
-    log_info "系统检测: ${OS_PRETTY} | ${ARCH}"
+    log_info "$(t '系统检测: ${OS_PRETTY} | ${ARCH}')"
 }
 
 # detect_os_id: 返回标准化 OS ID，供命令替换使用，避免捕获日志文本
@@ -168,9 +173,9 @@ detect_pkg_manager() {
         PKG_INSTALL="apk add"
         PKG_REMOVE="apk del"
     else
-        die "不支持的包管理器"
+        die "$(t '不支持的包管理器')"
     fi
-    log_info "包管理器: ${PKG_MGR}"
+    log_info "$(t '包管理器: ${PKG_MGR}')"
 }
 
 detect_service_manager() {
@@ -183,7 +188,7 @@ detect_service_manager() {
     else
         SVC_MGR="auto"
     fi
-    log_info "服务管理器: ${SVC_MGR}"
+    log_info "$(t '服务管理器: ${SVC_MGR}')"
 }
 
 detect_firewall() {
@@ -289,8 +294,8 @@ wait_for_apt_lock() {
     holders="$(_apt_lock_holders)"
     while [ -n "$holders" ]; do
         if [ "$waited" -ge "$max_wait" ]; then
-            log_error "等待 dpkg 锁超时 (${max_wait}s)，进程 ${holders} 仍持有 /var/lib/dpkg/lock-frontend"
-            log_error "可能是 unattended-upgrades 或 apt 正在运行；请稍后重试，或手动停止该进程后重跑"
+            log_error "$(t '等待 dpkg 锁超时 (${max_wait}s)，进程 ${holders} 仍持有 /var/lib/dpkg/lock-frontend')"
+            log_error "$(t '可能是 unattended-upgrades 或 apt 正在运行；请稍后重试，或手动停止该进程后重跑')"
             return 1
         fi
         if [ "$waited" -eq 0 ]; then
@@ -298,7 +303,7 @@ wait_for_apt_lock() {
             for pid in $holders; do
                 proc_name="${proc_name}$(ps -p "$pid" -o comm= 2>/dev/null || echo unknown) "
             done
-            log_warn "检测到进程 ${holders}(${proc_name}) 正持有 dpkg 锁，等待其释放（最多 ${max_wait}s）..."
+            log_warn "$(t '检测到进程 ${holders}(${proc_name}) 正持有 dpkg 锁，等待其释放（最多 ${max_wait}s）...')"
         fi
         sleep "$poll_interval"
         waited=$((waited + poll_interval))
@@ -306,7 +311,7 @@ wait_for_apt_lock() {
     done
 
     if [ "$waited" -gt 0 ]; then
-        log_info "dpkg 锁已释放，继续安装"
+        log_info "$(t 'dpkg 锁已释放，继续安装')"
     fi
     return 0
 }
@@ -314,12 +319,12 @@ wait_for_apt_lock() {
 # install_pkg: 跨发行版安装软件包
 install_pkg() {
     local pkg="$1"
-    log_info "安装软件包: ${pkg}"
+    log_info "$(t '安装软件包: ${pkg}')"
     wait_for_apt_lock || return 1
     if [[ "${PKG_UPDATE}" ]]; then
         eval "${PKG_UPDATE}" || true
     fi
-    eval "${PKG_INSTALL} ${pkg}" || die "软件包安装失败: ${pkg}"
+    eval "${PKG_INSTALL} ${pkg}" || die "$(t '软件包安装失败: ${pkg}')"
     audit "PKG_INSTALL" "${pkg}"
 }
 
@@ -341,7 +346,7 @@ apt_update() {
 # remove_pkg: 跨发行版卸载软件包
 remove_pkg() {
     local pkg="$1"
-    log_info "卸载软件包: ${pkg}"
+    log_info "$(t '卸载软件包: ${pkg}')"
     wait_for_apt_lock || return 1
     eval "${PKG_REMOVE} ${pkg}" || true
     audit "PKG_REMOVE" "${pkg}"
@@ -401,34 +406,34 @@ backup_file() {
     local dest="${BACKUPS_DIR}/$(echo "${src}" | tr '/' '_')_${ts}"
     cp -a "${src}" "${dest}"
     echo "${src}|${dest}" >> "${BACKUP_REGISTRY}"
-    log_debug "已备份: ${src} → ${dest}"
+    log_debug "$(t '已备份: ${src} → ${dest}')"
 }
 
 # restore_file: 从最新备份恢复
 restore_file() {
     local src="$1"
     if [[ ! -f "${BACKUP_REGISTRY}" ]]; then
-        log_warn "无备份记录，无法恢复: ${src}"
+        log_warn "$(t '无备份记录，无法恢复: ${src}')"
         return 1
     fi
     local latest_backup
     latest_backup=$(grep "^${src}|" "${BACKUP_REGISTRY}" | tail -1 | cut -d'|' -f2)
     if [[ -n "${latest_backup}" && -f "${latest_backup}" ]]; then
         cp -a "${latest_backup}" "${src}"
-        log_ok "已恢复: ${src} ← ${latest_backup}"
+        log_ok "$(t '已恢复: ${src} ← ${latest_backup}')"
         audit "RESTORE" "${src} ← ${latest_backup}"
     else
-        log_warn "未找到备份文件: ${src}"
+        log_warn "$(t '未找到备份文件: ${src}')"
         return 1
     fi
 }
 
 # rollback_all: 回滚当前会话所有修改
 rollback_all() {
-    log_warn "开始回滚所有更改..."
-    audit "ROLLBACK_START" "用户触发回滚"
+    log_warn "$(t '开始回滚所有更改...')"
+    audit "ROLLBACK_START" "$(t '用户触发回滚')"
     if [[ ! -f "${BACKUP_REGISTRY}" ]]; then
-        log_warn "无可回滚的操作"
+        log_warn "$(t '无可回滚的操作')"
         return 0
     fi
     local count=0
@@ -437,8 +442,8 @@ rollback_all() {
             cp -a "${dest}" "${src}" 2>/dev/null && count=$((count + 1))
         fi
     done < "${BACKUP_REGISTRY}"
-    log_ok "回滚完成: 已恢复 ${count} 个文件"
-    audit "ROLLBACK_DONE" "已恢复 ${count} 个文件"
+    log_ok "$(t '回滚完成: 已恢复 ${count} 个文件')"
+    audit "ROLLBACK_DONE" "$(t '已恢复 ${count} 个文件')"
 }
 
 #===============================================================================
@@ -460,7 +465,7 @@ config_save() {
     else
         echo "${key}=${value}" >> "${profile_file}"
     fi
-    log_debug "配置保存 [${profile}]: ${key}=${value}"
+    log_debug "$(t '配置保存 [${profile}]: ${key}=${value}')"
 }
 
 # config_get: 读取配置
@@ -487,7 +492,7 @@ config_export() {
     if [[ -f "${profile_file}" ]]; then
         cat "${profile_file}"
     else
-        log_warn "profile 不存在: ${profile}"
+        log_warn "$(t 'profile 不存在: ${profile}')"
     fi
 }
 
@@ -526,7 +531,7 @@ prompt_with_default() {
         return 0
     fi
     local resp
-    read -r -p "${prompt} (默认: ${default}): " resp
+    read -r -p "$(t '${prompt} (默认: ${default}): ')" resp
     echo "${resp:-${default}}"
 }
 
@@ -544,7 +549,7 @@ prompt_choice() {
     for i in "${!choices[@]}"; do
         echo "  $((i+1))) ${choices[$i]}"
     done
-    read -p "请选择 [1-${#choices[@]}]: " sel
+    read -p "$(t '请选择 [1-${#choices[@]}]: ')" sel
     if [[ "${sel}" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= ${#choices[@]} )); then
         echo "${sel}"
     else
@@ -576,7 +581,7 @@ state_set() {
     else
         echo "${module}=${status}" >> "${STATE_FILE}"
     fi
-    log_debug "状态追踪 [${module}]: ${status}"
+    log_debug "$(t '状态追踪 [${module}]: ${status}')"
 }
 
 # state_mark: 兼容旧模块接口；completed 统一映射为 done
@@ -606,13 +611,13 @@ state_is_done() {
 # state_reset: 重置所有状态
 state_reset() {
     > "${STATE_FILE}"
-    log_info "状态已重置"
+    log_info "$(t '状态已重置')"
 }
 
 # state_show: 显示所有状态
 state_show() {
     if [[ -f "${STATE_FILE}" ]]; then
-        echo -e "${BOLD}模块执行状态:${NC}"
+        echo -e "$(t '${BOLD}模块执行状态:${NC}')"
         while IFS='=' read -r module status; do
             case "${status}" in
                 done)    echo -e "  ${GREEN}✓${NC} ${module}" ;;
@@ -622,7 +627,7 @@ state_show() {
             esac
         done < "${STATE_FILE}"
     else
-        log_info "暂无状态记录"
+        log_info "$(t '暂无状态记录')"
     fi
 }
 
@@ -746,13 +751,13 @@ print_module_result() {
     local detail="${3:-}"
     case "${status}" in
         done|success|ok)
-            echo -e "         \033[1;32m✔ 完成\033[0m${detail:+ \033[2;37m(${detail})\033[0m}"
+            echo -e "$(t '         \033[1;32m✔ 完成\033[0m${detail:+ \033[2;37m(${detail})\033[0m}')"
             ;;
         failed|error)
-            echo -e "         \033[1;31m✖ 失败\033[0m${detail:+ \033[1;31m(${detail})\033[0m}"
+            echo -e "$(t '         \033[1;31m✖ 失败\033[0m${detail:+ \033[1;31m(${detail})\033[0m}')"
             ;;
         skipped)
-            echo -e "         \033[38;5;243m~ 跳过\033[0m${detail:+ \033[2;37m(${detail})\033[0m}"
+            echo -e "$(t '         \033[38;5;243m~ 跳过\033[0m${detail:+ \033[2;37m(${detail})\033[0m}')"
             ;;
         *)
             echo -e "         \033[1;34m? ${status}\033[0m${detail:+ \033[2;37m(${detail})\033[0m}"
@@ -783,32 +788,32 @@ detect_server_ip() {
 # print_review_card: 安装前配置确认
 print_review_card() {
     local modules_count="${1:-0}"
-    print_section "配置确认 / Configuration Review"
-    print_kv "主机名 (Hostname):" "${HOSTNAME:-}"
-    print_kv "管理用户 (User):" "${USERNAME:-}"
-    print_kv "时区 (Timezone):" "${TIMEZONE:-}"
-    print_kv "语言 (Locale):" "${LOCALE:-}"
-    print_kv "DNS 服务器:" "${PRIMARY_DNS:-} / ${SECONDARY_DNS:-}"
-    print_kv "SSH 端口 (Port):" "${SSH_PORT:-}"
-    print_kv "保留旧 SSH 端口:" "${SSH_KEEP_LEGACY_PORT:-true}"
-    print_kv "Root 远程登录:" "${PERMIT_ROOT_LOGIN:-}"
+    print_section "$(t '配置确认 / Configuration Review')"
+    print_kv "$(t '主机名 (Hostname):')" "${HOSTNAME:-}"
+    print_kv "$(t '管理用户 (User):')" "${USERNAME:-}"
+    print_kv "$(t '时区 (Timezone):')" "${TIMEZONE:-}"
+    print_kv "$(t '语言 (Locale):')" "${LOCALE:-}"
+    print_kv "$(t 'DNS 服务器:')" "${PRIMARY_DNS:-} / ${SECONDARY_DNS:-}"
+    print_kv "$(t 'SSH 端口 (Port):')" "${SSH_PORT:-}"
+    print_kv "$(t '保留旧 SSH 端口:')" "${SSH_KEEP_LEGACY_PORT:-true}"
+    print_kv "$(t 'Root 远程登录:')" "${PERMIT_ROOT_LOGIN:-}"
     if [ "${PASSWORD_AUTH:-no}" = "yes" ]; then
-        print_kv "密码认证 (Password):" "yes (密码已设置: $([ -n "${USER_PASSWORD:-}" ] && echo 是 || echo 否))"
+        print_kv "$(t '密码认证 (Password):')" "$(t 'yes (密码已设置: $([ -n ')"${USER_PASSWORD:-}"$(t ' ] && echo 是 || echo 否))')"
     else
-        print_kv "密码认证 (Password):" "no"
+        print_kv "$(t '密码认证 (Password):')" "no"
     fi
-    print_kv "公钥认证 (Pubkey):" "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-}}"
-    print_kv "Fail2ban 防爆破:" "${INSTALL_FAIL2BAN:-}"
-    print_kv "Docker 容器引擎:" "${INSTALL_DOCKER:-}"
+    print_kv "$(t '公钥认证 (Pubkey):')" "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-}}"
+    print_kv "$(t 'Fail2ban 防爆破:')" "${INSTALL_FAIL2BAN:-}"
+    print_kv "$(t 'Docker 容器引擎:')" "${INSTALL_DOCKER:-}"
     print_kv "Node.js & NPM:" "${INSTALL_NPM:-}"
-    print_kv "自动备份任务:" "${ENABLE_BACKUP:-}"
-    print_kv "系统监控端:" "${ENABLE_MONITORING:-${INSTALL_NODE_EXPORTER:-}}"
-    print_kv "系统清理优化:" "swap=${ENABLE_SWAP:-} snap=${REMOVE_SNAP:-} cache=${CLEAN_PKG_CACHE:-}"
-    print_kv "执行模块范围:" "${modules_count} 个模块"
-    print_kv "持久化配置文件:" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
-    print_kv "安装日志路径:" "${LOG_FILE}"
+    print_kv "$(t '自动备份任务:')" "${ENABLE_BACKUP:-}"
+    print_kv "$(t '系统监控端:')" "${ENABLE_MONITORING:-${INSTALL_NODE_EXPORTER:-}}"
+    print_kv "$(t '系统清理优化:')" "swap=${ENABLE_SWAP:-} snap=${REMOVE_SNAP:-} cache=${CLEAN_PKG_CACHE:-}"
+    print_kv "$(t '执行模块范围:')" "$(t '${modules_count} 个模块')"
+    print_kv "$(t '持久化配置文件:')" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
+    print_kv "$(t '安装日志路径:')" "${LOG_FILE}"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
-    echo -e "  \033[1;33m⚠ 提示: 开始后将按模块顺序执行系统配置与组件安装。\033[0m\n"
+    echo -e "$(t '  \033[1;33m⚠ 提示: 开始后将按模块顺序执行系统配置与组件安装。\033[0m\n')"
 }
 
 # write_install_result: 落盘可 source 的安装结果（权限 600）
@@ -850,7 +855,7 @@ write_install_result() {
     } > "${result_file}"
     umask "${prev_umask}"
     chmod 600 "${result_file}" 2>/dev/null || true
-    log_ok "安装结果已写入 ${result_file}"
+    log_ok "$(t '安装结果已写入 ${result_file}')"
 }
 
 # print_completion_card: 安装完成信息卡片
@@ -868,58 +873,58 @@ print_completion_card() {
     fi
 
     if [[ "${dry_run}" == "true" ]]; then
-        print_section "试运行完成 / Dry-Run Complete"
+        print_section "$(t '试运行完成 / Dry-Run Complete')"
     elif [[ "${FAILED_COUNT:-0}" -gt 0 ]]; then
-        print_section "安装部分完成 / Setup Partially Completed"
+        print_section "$(t '安装部分完成 / Setup Partially Completed')"
     elif [[ "$all_modules_skipped" == "true" ]]; then
-        print_section "未执行变更 / No Changes Applied"
+        print_section "$(t '未执行变更 / No Changes Applied')"
     else
-        print_section "装机完成 / Setup Complete"
+        print_section "$(t '装机完成 / Setup Complete')"
     fi
 
-    print_kv "总耗时 (Time):" "${duration}"
-    print_kv "主机名 (Host):" "${HOSTNAME:-}"
-    print_kv "管理用户 (User):" "${USERNAME:-}"
-    print_kv "SSH 端口 (Port):" "${SSH_PORT:-}"
-    print_kv "Root 远程登录:" "${PERMIT_ROOT_LOGIN:-}"
-    print_kv "密码认证登录:" "${PASSWORD_AUTH:-}"
+    print_kv "$(t '总耗时 (Time):')" "${duration}"
+    print_kv "$(t '主机名 (Host):')" "${HOSTNAME:-}"
+    print_kv "$(t '管理用户 (User):')" "${USERNAME:-}"
+    print_kv "$(t 'SSH 端口 (Port):')" "${SSH_PORT:-}"
+    print_kv "$(t 'Root 远程登录:')" "${PERMIT_ROOT_LOGIN:-}"
+    print_kv "$(t '密码认证登录:')" "${PASSWORD_AUTH:-}"
     if [[ -n "${server_ip}" ]]; then
-        print_kv "服务器公网 IP:" "${server_ip}"
-        print_kv "SSH 登录命令:" "$(printf '\033[1;32mssh -p %s %s@%s\033[0m' "${SSH_PORT:-22}" "${USERNAME:-root}" "${server_ip}")"
+        print_kv "$(t '服务器公网 IP:')" "${server_ip}"
+        print_kv "$(t 'SSH 登录命令:')" "$(printf '\033[1;32mssh -p %s %s@%s\033[0m' "${SSH_PORT:-22}" "${USERNAME:-root}" "${server_ip}")"
     else
-        print_kv "SSH 登录命令:" "$(printf '\033[1;32mssh -p %s %s@SERVER_IP\033[0m' "${SSH_PORT:-22}" "${USERNAME:-root}")"
+        print_kv "$(t 'SSH 登录命令:')" "$(printf '\033[1;32mssh -p %s %s@SERVER_IP\033[0m' "${SSH_PORT:-22}" "${USERNAME:-root}")"
     fi
-    print_kv "Fail2ban 防爆破:" "${INSTALL_FAIL2BAN:-}"
-    print_kv "Docker 容器引擎:" "${INSTALL_DOCKER:-}"
-    print_kv "定时备份配置:" "${ENABLE_BACKUP:-}"
-    print_kv "监控组件端:" "${ENABLE_MONITORING:-}"
-    print_kv "持久化配置文件:" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
-    print_kv "安装结果凭据:" "${INSTALL_RESULT_FILE}"
-    print_kv "完整安装日志:" "${LOG_FILE}"
+    print_kv "$(t 'Fail2ban 防爆破:')" "${INSTALL_FAIL2BAN:-}"
+    print_kv "$(t 'Docker 容器引擎:')" "${INSTALL_DOCKER:-}"
+    print_kv "$(t '定时备份配置:')" "${ENABLE_BACKUP:-}"
+    print_kv "$(t '监控组件端:')" "${ENABLE_MONITORING:-}"
+    print_kv "$(t '持久化配置文件:')" "${CONFIG_FILE:-${CONFIG_DIR}/vps_config.conf}"
+    print_kv "$(t '安装结果凭据:')" "${INSTALL_RESULT_FILE}"
+    print_kv "$(t '完整安装日志:')" "${LOG_FILE}"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
     print_actual_vps_status "$dry_run"
 
     if [[ -n "${module_summary}" ]]; then
         echo ""
-        echo -e "  \033[1;37m模块执行统计:\033[0m"
+        echo -e "$(t '  \033[1;37m模块执行统计:\033[0m')"
         echo -e "${module_summary}"
     fi
 
     if [[ "${dry_run}" != "true" && "${FAILED_COUNT:-0}" -gt 0 ]]; then
-        echo -e "\n  \033[1;31m✖ 有 ${FAILED_COUNT} 个模块失败，请根据上方状态和日志排查。\033[0m"
+        echo -e "$(t '\n  \033[1;31m✖ 有 ${FAILED_COUNT} 个模块失败，请根据上方状态和日志排查。\033[0m')"
     elif [[ "${dry_run}" != "true" && "$all_modules_skipped" == "true" ]]; then
-        echo -e "\n  \033[1;33m⚠ 本次没有执行任何模块；如需重跑请使用 -f 参数强制执行。\033[0m"
+        echo -e "$(t '\n  \033[1;33m⚠ 本次没有执行任何模块；如需重跑请使用 -f 参数强制执行。\033[0m')"
     elif [[ "${dry_run}" != "true" ]]; then
-        echo -e "\n  \033[1;33m⚠ 安全提醒: 请新建终端测试新 SSH 端口登录，确认无误后再断开当前会话。\033[0m"
+        echo -e "$(t '\n  \033[1;33m⚠ 安全提醒: 请新建终端测试新 SSH 端口登录，确认无误后再断开当前会话。\033[0m')"
     fi
 
     echo ""
-    echo -e "  \033[1;36m╭─ \033[1;37m常用快捷命令\033[1;36m ──────────────────────────────────────────\033[0m"
-    echo -e "  \033[1;36m│\033[0m  查看模块状态:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh --status\033[0m"
-    echo -e "  \033[1;36m│\033[0m  仅执行单模块:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -n --modules 05_ssh\033[0m"
-    echo -e "  \033[1;36m│\033[0m  试运行预览:    \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -d -n\033[0m"
-    echo -e "  \033[1;36m│\033[0m  实时查看日志:  \033[1;37mtail -f ${LOG_FILE}\033[0m"
+    echo -e "$(t '  \033[1;36m╭─ \033[1;37m常用快捷命令\033[1;36m ──────────────────────────────────────────\033[0m')"
+    echo -e "$(t '  \033[1;36m│\033[0m  查看模块状态:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh --status\033[0m')"
+    echo -e "$(t '  \033[1;36m│\033[0m  仅执行单模块:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -n --modules 05_ssh\033[0m')"
+    echo -e "$(t '  \033[1;36m│\033[0m  试运行预览:    \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -d -n\033[0m')"
+    echo -e "$(t '  \033[1;36m│\033[0m  实时查看日志:  \033[1;37mtail -f ${LOG_FILE}\033[0m')"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
 }
 
@@ -993,22 +998,22 @@ collect_actual_vps_status() {
 print_actual_vps_status() {
     local dry_run="${1:-false}"
     collect_actual_vps_status
-    print_section "VPS 实际生效状态 / Live System State"
+    print_section "$(t 'VPS 实际生效状态 / Live System State')"
     if [ "$dry_run" = true ]; then
-        echo -e "  \033[1;36m│\033[0m  \033[1;33m⚠ 当前为系统原始状态（试运行未应用变更）\033[0m"
+        echo -e "$(t '  \033[1;36m│\033[0m  \033[1;33m⚠ 当前为系统原始状态（试运行未应用变更）\033[0m')"
     fi
-    print_kv "主机名 (Hostname):" "$ACTUAL_HOSTNAME"
-    print_kv "系统版本 (OS):" "$ACTUAL_OS"
-    print_kv "硬件架构 (Arch):" "$ACTUAL_ARCH"
-    print_kv "系统时区 (Zone):" "$ACTUAL_TIMEZONE"
-    print_kv "语言环境 (Lang):" "$ACTUAL_LOCALE"
-    print_kv "管理用户 (User):" "$ACTUAL_USER"
-    print_kv "SSH 服务状态:" "$ACTUAL_SSH_SERVICE"
-    print_kv "SSH 监听端口:" "$ACTUAL_SSH_PORTS"
-    print_kv "防火墙状态:" "$ACTUAL_FIREWALL"
-    print_kv "Swap 状态:" "$ACTUAL_SWAP"
-    print_kv "Docker 状态:" "$ACTUAL_DOCKER"
-    print_kv "Fail2ban 状态:" "$ACTUAL_FAIL2BAN"
+    print_kv "$(t '主机名 (Hostname):')" "$ACTUAL_HOSTNAME"
+    print_kv "$(t '系统版本 (OS):')" "$ACTUAL_OS"
+    print_kv "$(t '硬件架构 (Arch):')" "$ACTUAL_ARCH"
+    print_kv "$(t '系统时区 (Zone):')" "$ACTUAL_TIMEZONE"
+    print_kv "$(t '语言环境 (Lang):')" "$ACTUAL_LOCALE"
+    print_kv "$(t '管理用户 (User):')" "$ACTUAL_USER"
+    print_kv "$(t 'SSH 服务状态:')" "$ACTUAL_SSH_SERVICE"
+    print_kv "$(t 'SSH 监听端口:')" "$ACTUAL_SSH_PORTS"
+    print_kv "$(t '防火墙状态:')" "$ACTUAL_FIREWALL"
+    print_kv "$(t 'Swap 状态:')" "$ACTUAL_SWAP"
+    print_kv "$(t 'Docker 状态:')" "$ACTUAL_DOCKER"
+    print_kv "$(t 'Fail2ban 状态:')" "$ACTUAL_FAIL2BAN"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 }
 
@@ -1031,7 +1036,7 @@ print_health_report() {
             warn) icon="!"; color="${YELLOW}"; warned=$((warned + 1)) ;;
             *) icon="✖"; color="${RED}"; failed=$((failed + 1)) ;;
         esac
-        printf "  \033[1;36m│\033[0m  ${color}%s\033[0m \033[1;37m%-18s\033[0m \033[2;37m目标: %s | 实际: %s\033[0m\n" \
+        printf "$(t '  \033[1;36m│\033[0m  ${color}%s\033[0m \033[1;37m%-18s\033[0m \033[2;37m目标: %s | 实际: %s\033[0m\n')" \
             "$icon" "$label" "$wanted" "$observed"
         printf '[%s] %s | expected: %s | actual: %s\n' "$status" "$label" "$wanted" "$observed" >> "$report_tmp"
     }
@@ -1040,41 +1045,41 @@ print_health_report() {
     local fix_modules=()
     add_fix_module() { case " ${fix_modules[*]-} " in *" $1 "*) ;; *) fix_modules+=("$1") ;; esac; }
 
-    print_section "配置体检报告 / Configuration Health Report"
+    print_section "$(t '配置体检报告 / Configuration Health Report')"
     if [ "$dry_run" = true ]; then
-        echo -e "  \033[1;36m│\033[0m  \033[1;33m! 试运行未修改系统，以下仅显示当前环境，未做配置判定。\033[0m"
+        echo -e "$(t '  \033[1;36m│\033[0m  \033[1;33m! 试运行未修改系统，以下仅显示当前环境，未做配置判定。\033[0m')"
         printf 'VPS Setup Configuration Health Report\nMode: dry-run (no live validation)\nGenerated: %s\n' "$(date -Is)" > "$report_tmp"
-        health_item warn "执行模式" "配置已应用" "试运行，未应用变更"
+        health_item warn "$(t '执行模式')" "$(t '配置已应用')" "$(t '试运行，未应用变更')"
     else
         printf 'VPS Setup Configuration Health Report\nGenerated: %s\n\n' "$(date -Is)" > "$report_tmp"
         collect_actual_vps_status
 
         if health_should_check_module "01_hostname"; then
-            [ "$ACTUAL_HOSTNAME" = "${HOSTNAME:-}" ] && health_item pass "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME" || { health_item fail "主机名" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME"; add_fix_module "01_hostname"; }
+            [ "$ACTUAL_HOSTNAME" = "${HOSTNAME:-}" ] && health_item pass "$(t '主机名')" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME" || { health_item fail "$(t '主机名')" "${HOSTNAME:-}" "$ACTUAL_HOSTNAME"; add_fix_module "01_hostname"; }
         fi
         if health_should_check_module "02_locale_timezone"; then
-            [ "$ACTUAL_TIMEZONE" = "${TIMEZONE:-}" ] && health_item pass "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE" || { health_item fail "系统时区" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE"; add_fix_module "02_locale_timezone"; }
+            [ "$ACTUAL_TIMEZONE" = "${TIMEZONE:-}" ] && health_item pass "$(t '系统时区')" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE" || { health_item fail "$(t '系统时区')" "${TIMEZONE:-}" "$ACTUAL_TIMEZONE"; add_fix_module "02_locale_timezone"; }
             case "$ACTUAL_LOCALE" in
-                "${LOCALE:-}"*) health_item pass "语言环境" "${LOCALE:-}" "$ACTUAL_LOCALE" ;;
-                *) health_item warn "语言环境" "${LOCALE:-}" "$ACTUAL_LOCALE"; add_fix_module "02_locale_timezone" ;;
+                "${LOCALE:-}"*) health_item pass "$(t '语言环境')" "${LOCALE:-}" "$ACTUAL_LOCALE" ;;
+                *) health_item warn "$(t '语言环境')" "${LOCALE:-}" "$ACTUAL_LOCALE"; add_fix_module "02_locale_timezone" ;;
             esac
         fi
         if health_should_check_module "04_user"; then
-            id "${USERNAME:-}" >/dev/null 2>&1 && health_item pass "管理用户" "${USERNAME:-}" "$ACTUAL_USER" || { health_item fail "管理用户" "${USERNAME:-}" "$ACTUAL_USER"; add_fix_module "04_user"; }
+            id "${USERNAME:-}" >/dev/null 2>&1 && health_item pass "$(t '管理用户')" "${USERNAME:-}" "$ACTUAL_USER" || { health_item fail "$(t '管理用户')" "${USERNAME:-}" "$ACTUAL_USER"; add_fix_module "04_user"; }
         fi
         if health_should_check_module "05_ssh"; then
-            [ "$ACTUAL_SSH_SERVICE" = "active" ] && health_item pass "SSH 服务" "active" "$ACTUAL_SSH_SERVICE" || { health_item fail "SSH 服务" "active" "$ACTUAL_SSH_SERVICE"; add_fix_module "05_ssh"; }
+            [ "$ACTUAL_SSH_SERVICE" = "active" ] && health_item pass "$(t 'SSH 服务')" "active" "$ACTUAL_SSH_SERVICE" || { health_item fail "$(t 'SSH 服务')" "active" "$ACTUAL_SSH_SERVICE"; add_fix_module "05_ssh"; }
             if printf '%s\n' "$ACTUAL_SSH_PORTS" | tr ',' '\n' | sed 's/^.*://' | grep -qx "${SSH_PORT:-22}"; then
-                health_item pass "SSH 端口" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
+                health_item pass "$(t 'SSH 端口')" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
             else
-                health_item fail "SSH 端口" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
+                health_item fail "$(t 'SSH 端口')" "${SSH_PORT:-22}" "$ACTUAL_SSH_PORTS"
                 add_fix_module "05_ssh"
             fi
         fi
         if health_should_check_module "06_firewall"; then
             case "$ACTUAL_FIREWALL" in
-                none|unknown|*inactive*) health_item fail "防火墙" "已启用" "$ACTUAL_FIREWALL"; add_fix_module "06_firewall" ;;
-                *) health_item pass "防火墙" "已启用" "$ACTUAL_FIREWALL" ;;
+                none|unknown|*inactive*) health_item fail "$(t '防火墙')" "$(t '已启用')" "$ACTUAL_FIREWALL"; add_fix_module "06_firewall" ;;
+                *) health_item pass "$(t '防火墙')" "$(t '已启用')" "$ACTUAL_FIREWALL" ;;
             esac
             # Deep validation: default-deny policy and no unconstrained allow rules.
             # Skip silently when rules are unreadable (non-root / no iptables backend).
@@ -1082,15 +1087,15 @@ print_health_report() {
                 local input_policy unconstrained_all
                 input_policy="$(iptables -S INPUT 2>/dev/null | head -n1 | sed 's/-P INPUT //')"
                 case "$input_policy" in
-                    DROP|REJECT) health_item pass "INPUT 默认策略" "DROP" "$input_policy" ;;
-                    *) health_item fail "INPUT 默认策略" "DROP" "$input_policy"; add_fix_module "06_firewall" ;;
+                    DROP|REJECT) health_item pass "$(t 'INPUT 默认策略')" "DROP" "$input_policy" ;;
+                    *) health_item fail "$(t 'INPUT 默认策略')" "DROP" "$input_policy"; add_fix_module "06_firewall" ;;
                 esac
                 # An ACCEPT rule with no match criteria lets all traffic bypass the policy.
                 unconstrained_all="$(iptables -S INPUT 2>/dev/null | grep -cE '^-A INPUT (-j|--jump) ACCEPT[[:space:]]*$' || true)"
                 if [ "${unconstrained_all:-0}" -eq 0 ]; then
-                    health_item pass "放行规则质量" "无无条件放行" "未发现无条件 ACCEPT"
+                    health_item pass "$(t '放行规则质量')" "$(t '无无条件放行')" "$(t '未发现无条件 ACCEPT')"
                 else
-                    health_item fail "放行规则质量" "无无条件放行" "发现 ${unconstrained_all} 条无条件 ACCEPT"
+                    health_item fail "$(t '放行规则质量')" "$(t '无无条件放行')" "$(t '发现 ${unconstrained_all} 条无条件 ACCEPT')"
                     add_fix_module "06_firewall"
                 fi
                 # Lockout guard: when policy drops by default, an SSH allow rule must exist.
@@ -1103,9 +1108,9 @@ print_health_report() {
                         fi
                     done
                     if [ "$ssh_allowed" = true ]; then
-                        health_item pass "SSH 防火墙放行" "SSH 端口已放行" "存在 SSH 放行规则"
+                        health_item pass "$(t 'SSH 防火墙放行')" "$(t 'SSH 端口已放行')" "$(t '存在 SSH 放行规则')"
                     else
-                        health_item fail "SSH 防火墙放行" "SSH 端口已放行" "DROP 策略下未找到 SSH 放行规则"
+                        health_item fail "$(t 'SSH 防火墙放行')" "$(t 'SSH 端口已放行')" "$(t 'DROP 策略下未找到 SSH 放行规则')"
                         add_fix_module "06_firewall"
                     fi
                 fi
@@ -1113,7 +1118,7 @@ print_health_report() {
             # Migration guard: legacy SSH port kept open on purpose, but must be visible.
             if [ "${SSH_KEEP_LEGACY_PORT:-false}" = "true" ] && [ "${SSH_PORT:-22}" != "22" ] && \
                printf '%s\n' "$ACTUAL_SSH_PORTS" | tr ',' '\n' | sed 's/^.*://' | grep -qx "22"; then
-                health_item warn "旧 SSH 端口 22" "迁移后关闭" "仍开放（SSH_KEEP_LEGACY_PORT=true）"
+                health_item warn "$(t '旧 SSH 端口 22')" "$(t '迁移后关闭')" "$(t '仍开放（SSH_KEEP_LEGACY_PORT=true）')"
             fi
         fi
 
@@ -1124,9 +1129,9 @@ print_health_report() {
             [ "$ACTUAL_FAIL2BAN" = "active" ] && health_item pass "Fail2ban" "active" "$ACTUAL_FAIL2BAN" || { health_item fail "Fail2ban" "active" "$ACTUAL_FAIL2BAN"; add_fix_module "07_fail2ban"; }
         fi
         if [ "${FAILED_COUNT:-0}" -eq 0 ]; then
-            health_item pass "模块执行" "无失败模块" "失败 ${FAILED_COUNT:-0}"
+            health_item pass "$(t '模块执行')" "$(t '无失败模块')" "$(t '失败 ${FAILED_COUNT:-0}')"
         else
-            health_item fail "模块执行" "无失败模块" "失败 ${FAILED_COUNT:-0}"
+            health_item fail "$(t '模块执行')" "$(t '无失败模块')" "$(t '失败 ${FAILED_COUNT:-0}')"
         fi
     fi
 
@@ -1140,11 +1145,11 @@ print_health_report() {
     fi
     mv -f "$report_tmp" "$report_file"
     chmod 600 "$report_file" 2>/dev/null || true
-    printf "  \033[1;36m│\033[0m  \033[1;37m结果:\033[0m ${GREEN}✔ %s 通过\033[0m  ${YELLOW}! %s 提示\033[0m  ${RED}✖ %s 失败\033[0m\n" "$passed" "$warned" "$failed"
+    printf "$(t '  \033[1;36m│\033[0m  \033[1;37m结果:\033[0m ${GREEN}✔ %s 通过\033[0m  ${YELLOW}! %s 提示\033[0m  ${RED}✖ %s 失败\033[0m\n')" "$passed" "$warned" "$failed"
     if [ ${#fix_modules[@]} -gt 0 ]; then
-        echo -e "  \033[1;36m│\033[0m  \033[1;33m修复建议:\033[0m \033[1;37msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules $(IFS=','; echo "${fix_modules[*]}")\033[0m"
+        echo -e "$(t '  \033[1;36m│\033[0m  \033[1;33m修复建议:\033[0m \033[1;37msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules $(IFS='\'','\''; echo ')"${fix_modules[*]}")\033[0m"
     fi
-    print_kv "报告文件:" "$report_file"
+    print_kv "$(t '报告文件:')" "$report_file"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
 
     [ "$failed" -eq 0 ]
@@ -1154,10 +1159,10 @@ show_latest_health_report() {
     local report_file
     report_file="$(find "${LOGS_DIR}" -maxdepth 1 -type f -name 'health_report_*.txt' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)"
     if [ -z "$report_file" ] || [ ! -f "$report_file" ]; then
-        msg_box "配置体检报告" "尚未生成体检报告。请先完成一次非试运行安装。"
+        msg_box "$(t '配置体检报告')" "$(t '尚未生成体检报告。请先完成一次非试运行安装。')"
         return 1
     fi
-    print_section "最近配置体检报告"
+    print_section "$(t '最近配置体检报告')"
     sed 's/^/  │  /' "$report_file"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 }
@@ -1173,7 +1178,7 @@ health_should_check_module() {
 # print_status_table: 美化模块状态表
 print_status_table() {
     local -n _modules_ref=$1
-    print_section "模块执行状态清单 / Module Status"
+    print_section "$(t '模块执行状态清单 / Module Status')"
     local module name desc status icon color
     for module in "${_modules_ref[@]}"; do
         name="${module%%:*}"
@@ -1183,10 +1188,10 @@ print_status_table() {
             status="pending"
         fi
         case "${status}" in
-            done)    icon="✔"; color="${GREEN}"; status="已完成" ;;
-            skipped) icon="~"; color="${YELLOW}"; status="已跳过" ;;
-            failed)  icon="✖"; color="${RED}"; status="失败" ;;
-            pending|未运行) icon="·"; color="${DIM}"; status="未运行" ;;
+            done)    icon="✔"; color="${GREEN}"; status="$(t '已完成')" ;;
+            skipped) icon="~"; color="${YELLOW}"; status="$(t '已跳过')" ;;
+            failed)  icon="✖"; color="${RED}"; status="$(t '失败')" ;;
+            pending|未运行) icon="·"; color="${DIM}"; status="$(t '未运行')" ;;
             *)       icon="?"; color="${BLUE}" ;;
         esac
         printf "  \033[1;36m│\033[0m  ${color}%s\033[0m \033[1;37m%-18s\033[0m %-30s \033[2;37m[%s]\033[0m\n" "${icon}" "${name}" "${desc}" "${status}"
@@ -1203,20 +1208,20 @@ init_system() {
     detect_pkg_manager
     detect_service_manager
     CONFIG_LOADED=true
-    log_info "VPS一键装机 v${VPS_TOOL_VERSION} 已初始化"
-    log_info "系统: ${OS_PRETTY} | 包管理: ${PKG_MGR} | 服务管理: ${SVC_MGR}"
+    log_info "$(t 'VPS一键装机 v${VPS_TOOL_VERSION} 已初始化')"
+    log_info "$(t '系统: ${OS_PRETTY} | 包管理: ${PKG_MGR} | 服务管理: ${SVC_MGR}')"
 }
 
 # print_startup_banner: 启动页
 print_startup_banner() {
-    local mode_label="${1:-交互式配置向导}"
+    local mode_label="$(t '${1:-交互式配置向导}')"
     echo ""
     echo -e "  \033[1;36m╭──────────────────────────────────────────────────────────╮\033[0m"
-    echo -e "  \033[1;36m│\033[0m  \033[1;37m❖ VPS 一键装机 v${VPS_TOOL_VERSION}\033[0m"
+    echo -e "$(t '  \033[1;36m│\033[0m  \033[1;37m❖ VPS 一键装机 v${VPS_TOOL_VERSION}\033[0m')"
     echo -e "  \033[1;36m├──────────────────────────────────────────────────────────┤\033[0m"
-    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "系统环境:" "${OS_PRETTY:-unknown} (${ARCH:-$(uname -m)})"
-    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "包管理器:" "${PKG_MGR:-unknown}"
-    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "运行模式:" "${mode_label}"
-    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "日志路径:" "${LOG_FILE}"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "$(t '系统环境:')" "${OS_PRETTY:-unknown} (${ARCH:-$(uname -m)})"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "$(t '包管理器:')" "${PKG_MGR:-unknown}"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "$(t '运行模式:')" "${mode_label}"
+    printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "$(t '日志路径:')" "${LOG_FILE}"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────╯\033[0m"
 }
