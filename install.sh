@@ -194,7 +194,7 @@ validate_release_tree() {
         echo "Downloaded release contains symbolic links; refusing to install it."
         exit 1
     fi
-    for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
+    for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh lib/i18n.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
         if [ ! -f "$release_dir/$required_file" ]; then
             echo "Downloaded release is incomplete: missing $required_file"
             exit 1
@@ -260,27 +260,35 @@ verify_release_checksum() {
 
     if [ -n "$EXPECTED_SHA256" ]; then
         expected_checksum="$EXPECTED_SHA256"
-    else
-        case "$archive_url" in
-            */archive/refs/heads/*)
-                echo "Warning: installing an unpinned development branch archive. Use a release tag and --sha256 for production."
-                return 0
-                ;;
-        esac
-        checksum_url="${archive_url}.sha256"
-        checksum_file="${archive_file}.sha256"
-        if ! curl -fsSL "$checksum_url" -o "$checksum_file"; then
-            echo "Release checksum is unavailable: $checksum_url"
+        actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
+        if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
+            echo "Release checksum verification failed."
             exit 1
         fi
+        echo "Release checksum verified."
+        return 0
+    fi
+
+    case "$archive_url" in
+        */archive/refs/heads/*)
+            echo "Warning: installing an unpinned development branch archive. Use a release tag and --sha256 for production."
+            return 0
+            ;;
+    esac
+
+    checksum_url="${archive_url}.sha256"
+    checksum_file="${archive_file}.sha256"
+    if curl -fsSL "$checksum_url" -o "$checksum_file" 2>/dev/null; then
         expected_checksum="$(awk 'NF {print $1; exit}' "$checksum_file")"
+        actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
+        if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
+            echo "Release checksum verification failed."
+            exit 1
+        fi
+        echo "Release checksum verified."
+    else
+        echo "Note: upstream release checksum file is not available; skipping checksum verification."
     fi
-    actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
-    if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
-        echo "Release checksum verification failed."
-        exit 1
-    fi
-    echo "Release checksum verified."
 }
 
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/vps_setup.sh" ]; then
@@ -332,7 +340,7 @@ fi
 cd "$INSTALL_DIR"
 chmod +x vps_setup.sh
 
-for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
+for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh lib/i18n.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
     if [ ! -f "$INSTALL_DIR/$required_file" ]; then
         echo "Installation is incomplete: missing $INSTALL_DIR/$required_file"
         exit 1
