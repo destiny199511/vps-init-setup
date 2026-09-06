@@ -61,7 +61,20 @@ network_main() {
         echo "net.ipv4.tcp_syncookies = $tcp_syncookies"
         echo ""
         echo "# TCP Fast Open"
-        echo "net.ipv4.tcp_fastopen = $tcp_fastopen"
+        echo "net.ipv4.tcp_fastopen = $tcp_fastopen"        echo ""
+        echo "# Security Hardening - Anti-Spoofing & Anti-DDoS"
+        echo "net.ipv4.conf.all.rp_filter = 1"
+        echo "net.ipv4.conf.default.rp_filter = 1"
+        echo "net.ipv4.conf.all.accept_source_route = 0"
+        echo "net.ipv6.conf.all.accept_source_route = 0"
+        echo "net.ipv4.conf.all.accept_redirects = 0"
+        echo "net.ipv6.conf.all.accept_redirects = 0"
+        echo "net.ipv4.conf.all.send_redirects = 0"
+        echo "net.ipv4.icmp_echo_ignore_broadcasts = 1"
+        echo "net.ipv4.icmp_ignore_bogus_error_responses = 1"
+        echo "fs.protected_hardlinks = 1"
+        echo "fs.protected_symlinks = 1"
+        echo "fs.suid_dumpable = 0"
     } > /etc/sysctl.d/99-vps-network.conf
 
     # Apply settings

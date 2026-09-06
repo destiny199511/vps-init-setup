@@ -142,11 +142,28 @@ user_main() {
             "")
                 if [ -s "$authorized_keys" ]; then
                     log_info "Existing authorized_keys found for $username; preserving existing SSH keys"
-                elif [ "$password_authentication" = "yes" ]; then
-                    log_warn "No SSH public key supplied; skipping server-side key generation because password authentication is enabled"
                 else
-                    log_error "Public-key authentication requires an SSH public key for $username"
-                    return 1
+                    # Try inheriting existing authorized_keys from current active user (SUDO_USER or root)
+                    local inherited_keys=""
+                    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "$username" ] && [ -s "/home/${SUDO_USER}/.ssh/authorized_keys" ]; then
+                        inherited_keys="/home/${SUDO_USER}/.ssh/authorized_keys"
+                    elif [ -s "/root/.ssh/authorized_keys" ]; then
+                        inherited_keys="/root/.ssh/authorized_keys"
+                    fi
+
+                    if [ -n "$inherited_keys" ] && grep -qE '^(ssh-|ecdsa-sha2-)' "$inherited_keys" 2>/dev/null; then
+                        log_info "Inheriting authorized SSH keys from $inherited_keys for user $username"
+                        cp -p "$inherited_keys" "$authorized_keys"
+                        chmod 600 "$authorized_keys"
+                        chown "$username:$username" "$authorized_keys"
+                        changes_made=true
+                        audit "SSH_KEY_INHERITED" "username=$username source=$inherited_keys"
+                    elif [ "$password_authentication" = "yes" ]; then
+                        log_warn "No SSH public key supplied; skipping server-side key generation because password authentication is enabled"
+                    else
+                        log_error "Public-key authentication requires an SSH public key for $username"
+                        return 1
+                    fi
                 fi
                 ;;
             *)

@@ -344,7 +344,7 @@ ssh_main() {
         echo "PermitTunnel no"
         echo "GatewayPorts no"
         echo "X11Forwarding no"
-        echo "AllowTcpForwarding no"
+        echo "AllowTcpForwarding yes"
         echo "PermitTTY yes"
         echo "PrintMotd yes"
         echo "PrintLastLog yes"

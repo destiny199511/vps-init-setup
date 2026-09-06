@@ -198,6 +198,18 @@ test_fail2ban_install_flag_skip() {
     ) || fail "fail2ban module should skip cleanly when INSTALL_FAIL2BAN=false"
 }
 
+test_network_security_sysctl_generation() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/09_network.sh
+        # Verify network_info and prerequisites
+        network_info >/dev/null
+        network_prerequisites
+    ) || fail "network security sysctl module check"
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
@@ -209,5 +221,6 @@ test_apply_config_defaults_completeness
 test_i18n_translation_and_fallbacks
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
+test_network_security_sysctl_generation
 test_unsafe_install_dir_guard
 printf 'Regression checks passed.\n'
