@@ -798,7 +798,11 @@ print_review_card() {
     print_kv "$(t '保留旧 SSH 端口:')" "${SSH_KEEP_LEGACY_PORT:-true}"
     print_kv "$(t 'Root 远程登录:')" "${PERMIT_ROOT_LOGIN:-}"
     if [ "${PASSWORD_AUTH:-no}" = "yes" ]; then
-        print_kv "$(t '密码认证 (Password):')" "$(t 'yes (密码已设置: $([ -n ')"${USER_PASSWORD:-}"$(t ' ] && echo 是 || echo 否))')"
+        if [ -n "${USER_PASSWORD:-}" ]; then
+            print_kv "$(t '密码认证 (Password):')" "yes ($(t '密码已设置'))"
+        else
+            print_kv "$(t '密码认证 (Password):')" "yes ($(t '未设置新密码'))"
+        fi
     else
         print_kv "$(t '密码认证 (Password):')" "no"
     fi
@@ -1147,7 +1151,9 @@ print_health_report() {
     chmod 600 "$report_file" 2>/dev/null || true
     printf "$(t '  \033[1;36m│\033[0m  \033[1;37m结果:\033[0m ${GREEN}✔ %s 通过\033[0m  ${YELLOW}! %s 提示\033[0m  ${RED}✖ %s 失败\033[0m\n')" "$passed" "$warned" "$failed"
     if [ ${#fix_modules[@]} -gt 0 ]; then
-        echo -e "$(t '  \033[1;36m│\033[0m  \033[1;33m修复建议:\033[0m \033[1;37msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules $(IFS='\'','\''; echo ')"${fix_modules[*]}")\033[0m"
+        local fix_mods_str
+        fix_mods_str="$(IFS=','; echo "${fix_modules[*]}")"
+        echo -e "  \033[1;36m│\033[0m  \033[1;33m$(t '修复建议:')\033[0m \033[1;37msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh -n -f --modules ${fix_mods_str}\033[0m"
     fi
     print_kv "$(t '报告文件:')" "$report_file"
     echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"

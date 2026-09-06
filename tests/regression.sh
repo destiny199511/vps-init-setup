@@ -136,6 +136,68 @@ test_apt_lock_wait_guard() {
     ) || fail "apt lock wait guard"
 }
 
+test_apply_config_defaults_completeness() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        apply_config_defaults
+        for var in $(get_config_var_names); do
+            case "$var" in
+                USER_PASSWORD|SSH_PUBKEY|ALLOWED_PORTS|DOCKER_INSECURE_REGISTRIES|DOCKER_REGISTRY_MIRRORS|FAIL2BAN_IGNOREIP|BACKUP_GPG_RECIPIENT|SWAP_SIZE|USER_FULLNAME)
+                    # These can be empty by default
+                    ;;
+                *)
+                    [ -n "${!var:-}" ] || {
+                        echo "Config var $var is empty after apply_config_defaults"
+                        return 1
+                    }
+                    ;;
+            esac
+        done
+    ) || fail "apply_config_defaults completeness"
+}
+
+test_i18n_translation_and_fallbacks() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source lib/i18n.sh
+        set_ui_language en
+        [ "$(t '主菜单 (Main Menu)')" = "Main Menu" ]
+        set_ui_language ja
+        [ "$(t '主菜单 (Main Menu)')" = "メインメニュー" ]
+        set_ui_language es
+        [ "$(t '主菜单 (Main Menu)')" = "Menú Principal" ]
+        set_ui_language zh
+        [ "$(t '主菜单 (Main Menu)')" = "主菜单 (Main Menu)" ]
+    ) || fail "i18n translation and fallbacks"
+}
+
+test_docker_install_flag_skip() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/08_docker.sh
+        INSTALL_DOCKER="false"
+        INSTALL_NPM="false"
+        docker_main
+    ) || fail "docker module should skip cleanly when INSTALL_DOCKER=false"
+}
+
+test_fail2ban_install_flag_skip() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/07_fail2ban.sh
+        INSTALL_FAIL2BAN="false"
+        fail2ban_main
+    ) || fail "fail2ban module should skip cleanly when INSTALL_FAIL2BAN=false"
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
@@ -143,5 +205,9 @@ test_tui_engine_load
 test_tui_noninteractive_fallback
 test_tui_eof_cancellation
 test_apt_lock_wait_guard
+test_apply_config_defaults_completeness
+test_i18n_translation_and_fallbacks
+test_docker_install_flag_skip
+test_fail2ban_install_flag_skip
 test_unsafe_install_dir_guard
 printf 'Regression checks passed.\n'

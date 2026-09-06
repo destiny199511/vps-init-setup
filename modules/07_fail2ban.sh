@@ -13,6 +13,13 @@ fail2ban_prerequisites() {
 
 fail2ban_main() {
     log_info "Starting Fail2ban installation and configuration..."
+
+    local install_fail2ban="${INSTALL_FAIL2BAN:-true}"
+    if [ "$install_fail2ban" != "true" ] && [ "$install_fail2ban" != "yes" ]; then
+        log_info "Fail2ban installation skipped by configuration (INSTALL_FAIL2BAN=$install_fail2ban)"
+        state_mark "fail2ban" "completed"
+        return 0
+    fi
     
     # Check if fail2ban is already installed
     if command -v fail2ban-client >/dev/null 2>&1; then

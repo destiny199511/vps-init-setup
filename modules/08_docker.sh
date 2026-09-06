@@ -124,7 +124,48 @@ docker_write_daemon_config() {
     mv -f "$candidate" "$config_path"
 }
 
+docker_install_nodejs_npm() {
+    log_info "Installing Node.js and npm..."
+    case "$(detect_package_manager)" in
+        apt|deb)
+            install_package nodejs npm || install_package nodejs
+            ;;
+        yum|dnf|rpm)
+            install_package nodejs npm || install_package nodejs
+            ;;
+        apk)
+            install_package nodejs npm
+            ;;
+        pacman)
+            install_package nodejs npm
+            ;;
+        *)
+            log_warn "Unsupported package manager for automatic Node.js/npm installation"
+            return 0
+            ;;
+    esac
+    if command -v node >/dev/null 2>&1 || command -v npm >/dev/null 2>&1; then
+        log_info "Node.js/npm installed: node $(node -v 2>/dev/null || echo 'N/A'), npm $(npm -v 2>/dev/null || echo 'N/A')"
+        audit "NODEJS_NPM_INSTALLED" "node=$(node -v 2>/dev/null || echo 'N/A') npm=$(npm -v 2>/dev/null || echo 'N/A')"
+    fi
+}
+
 docker_main() {
+    local install_docker="${INSTALL_DOCKER:-true}"
+    local install_npm="${INSTALL_NPM:-false}"
+
+    # If Node.js/npm is requested, install it
+    if [ "$install_npm" = "true" ] || [ "$install_npm" = "yes" ]; then
+        docker_install_nodejs_npm
+    fi
+
+    # Check if Docker installation was requested
+    if [ "$install_docker" != "true" ] && [ "$install_docker" != "yes" ]; then
+        log_info "Docker installation skipped by configuration (INSTALL_DOCKER=$install_docker)"
+        state_mark "docker" "completed"
+        return 0
+    fi
+
     log_info "Starting Docker installation and configuration..."
     
     # Check if Docker is already installed
