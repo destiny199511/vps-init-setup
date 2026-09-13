@@ -42,6 +42,7 @@ The main menu offers:
 5. Start the installation.
 6. View module status.
 7. View the latest health report.
+8. Inspect common system configuration (live status of user, SSH, firewall, Docker, backup, monitoring, kernel optimization).
 
 In the wizard, press `Enter` to accept defaults; press `b` or `Esc` to go back one step. Arrow keys, `j`/`k`, and number keys are supported for menu selection. A card-style UI is used when the terminal is at least 60 columns wide and is a TTY; otherwise it falls back to a plain text menu.
 
@@ -76,6 +77,22 @@ sudo ./vps_setup.sh --health
 ```
 
 The report compares the target configuration against the current system state and prints pass/warn/fail counts; files are saved to `logs/health_report_*.txt`.
+
+Inspect common system configuration and live status:
+
+```bash
+# View all common configurations (User/SSH/Firewall/Docker/Backup/Monitoring/Optimization)
+sudo ./vps_setup.sh --view
+
+# Inspect specific categories
+sudo ./vps_setup.sh --view user
+sudo ./vps_setup.sh --view ssh
+sudo ./vps_setup.sh --view firewall
+sudo ./vps_setup.sh --view docker
+sudo ./vps_setup.sh --view backup
+sudo ./vps_setup.sh --view monitoring
+sudo ./vps_setup.sh --view optimization
+```
 
 Other useful checks:
 
@@ -112,6 +129,7 @@ At the end of each run a live status card is also shown, including hostname, tim
 --modules <list>        Run only specified modules, e.g. 01_hostname,05_ssh
 --status                Show module execution status
 --health                Show the latest configuration health report
+--view, --show-config   Inspect common system configuration (sections: all, user, ssh, firewall, docker, backup, monitoring, optimization)
 ```
 
 For the full option list, run:
@@ -126,6 +144,12 @@ sudo ./vps_setup.sh --help
 curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
   | sudo bash -s -- --ref main --update-only
 ```
+
+Common parameters supported by `install.sh`:
+- `--ref <tag|branch>`: Specify target release tag or branch (defaults to latest release or tag in `VERSION`).
+- `--sha256 <hash>`: Expected SHA-256 archive hash (recommended for production verification).
+- `--insecure-skip-verify`: Bypass checksum verification if upstream checksum file is unavailable.
+- `--update-only`: Update script files without launching the setup wizard.
 
 Updates preserve `config/`, `logs/`, and `backups/`. Key files:
 

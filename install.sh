@@ -219,7 +219,7 @@ resolve_release_tag() {
         local release_json
         release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
         local tag_name
-        tag_name="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name": *"\([^\"]*\)".*/\1/p' | head -n 1)"
+        tag_name="$(printf '%s\n' "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"tag_name": *"//; s/"$//' | head -n 1)"
         if [ -n "$tag_name" ]; then
             printf '%s\n' "$tag_name"
         else
@@ -239,14 +239,14 @@ resolve_download_url() {
 
     if [ "$release_tag" = "latest" ] || [ -z "$release_tag" ]; then
         api_url="https://api.github.com/repos/${repo}/releases/latest"
-        release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url")"
-        release_tag="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)"
+        release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
+        release_tag="$(printf '%s\n' "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"tag_name": *"//; s/"$//' | head -n 1)"
     fi
 
     if [ -n "$release_tag" ] && [ "$release_tag" != "main" ] && [ "$release_tag" != "master" ]; then
         api_url="https://api.github.com/repos/${repo}/releases/tags/${release_tag}"
         release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
-        asset_url="$(printf '%s\n' "$release_json" | grep -o '"browser_download_url": "[^"]*"' | sed 's/.*"\([^\"]*\)"/\1/' | grep -E 'vps-init-setup.*\.(tar\.gz|tgz)$' | head -n 1 || true)"
+        asset_url="$(printf '%s\n' "$release_json" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"browser_download_url": *"//; s/"$//' | grep -E 'vps-init-setup.*(\.tar\.gz|\.tgz)$' | head -n 1 || true)"
         if [ -n "$asset_url" ]; then
             printf '%s\n' "$asset_url"
             return 0
@@ -328,9 +328,14 @@ else
         echo "Downloaded release contains unsafe archive paths; refusing to extract it."
         exit 1
     fi
-    tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir"
+    mkdir -p "$tmp_dir/extracted"
+    tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/extracted"
 
-    extracted_dir="$(find "$tmp_dir" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
+    if [ -f "$tmp_dir/extracted/vps_setup.sh" ]; then
+        extracted_dir="$tmp_dir/extracted"
+    else
+        extracted_dir="$(find "$tmp_dir/extracted" -maxdepth 1 -mindepth 1 -type d -exec test -f '{}/vps_setup.sh' ';' -print | head -n 1)"
+    fi
     if [ -z "$extracted_dir" ]; then
         echo "Failed to extract the downloaded archive."
         exit 1

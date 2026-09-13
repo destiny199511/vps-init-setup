@@ -248,6 +248,27 @@ test_rollback_cli_guard() {
     echo "$output" | grep -Fq "无可回滚的文件" || fail "rollback without registry should report no files"
 }
 
+test_view_config_cli() {
+    local isolated_repo="$SANDBOX_DIR/view-config-guard"
+    cp -a "$ROOT_DIR" "$isolated_repo"
+    local output
+    # Test --view all
+    output=$("$isolated_repo/vps_setup.sh" --view 2>&1)
+    echo "$output" | grep -Fq "用户与权限配置" || fail "--view all missing user section"
+    echo "$output" | grep -Fq "SSH 服务与安全配置" || fail "--view all missing ssh section"
+    echo "$output" | grep -Fq "防火墙与开放端口" || fail "--view all missing firewall section"
+    echo "$output" | grep -Fq "Docker 容器环境配置" || fail "--view all missing docker section"
+    echo "$output" | grep -Fq "系统备份任务配置" || fail "--view all missing backup section"
+    echo "$output" | grep -Fq "系统监控与指标探针" || fail "--view all missing monitoring section"
+    echo "$output" | grep -Fq "系统优化与内核调优" || fail "--view all missing optimization section"
+
+    # Test single sections
+    output=$("$isolated_repo/vps_setup.sh" --view ssh 2>&1)
+    echo "$output" | grep -Fq "SSH 服务与安全配置" || fail "--view ssh failed"
+    output=$("$isolated_repo/vps_setup.sh" --view docker 2>&1)
+    echo "$output" | grep -Fq "Docker 容器环境配置" || fail "--view docker failed"
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
@@ -261,6 +282,7 @@ test_i18n_variable_interpolation
 test_eval_elimination_in_user_module
 test_root_guard
 test_rollback_cli_guard
+test_view_config_cli
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
 test_network_security_sysctl_generation

@@ -13,7 +13,7 @@ set -euo pipefail
 # 尽早检查 root 权限（在日志或文件初始化之前输出友好提示）
 if [ "${EUID:-$(id -u)}" -ne 0 ] && [ "${SKIP_ROOT_CHECK:-false}" != "true" ]; then
     case "${1:-}" in
-        -h|--help|-v|--version)
+        -h|--help|-v|--version|--status|--health|--view|--show-config)
             ;;
         *)
             echo -e "\033[0;31m[ERROR]\033[0m 此脚本必须以 root 权限运行 (This script must be run as root)" >&2
@@ -28,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/core.sh"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/tui.sh"
+source "${SCRIPT_DIR}/lib/config_viewer.sh"
 cd "${SCRIPT_DIR}"
 
 # 全局退出与中断信号处理
@@ -59,7 +60,8 @@ DRY_RUN=false
 FORCE_MODE=false
 FORCE=false
 AUTO_YES="${AUTO_YES:-false}"
-ACTION="install" # install, rollback, status, health
+ACTION="install" # install, rollback, status, health, view_config
+VIEW_SECTION="all"
 SELECTED_MODULES=() # 如果为空则表示所有模块
 CONFIG_FILE="${CONFIG_DIR}/vps_config.conf"
 WIZARD_TOTAL_STEPS=7
@@ -1004,10 +1006,11 @@ show_main_menu() {
                 "开始执行安装 (Start Installation)     [确认并立即执行]"
                 "查看模块状态 (Check Module Status)    [查询完成清单]"
                 "查看配置体检报告 (Health Report)       [核验实际生效状态]"
+                "查看常用系统配置 (Inspect System Config) [用户/SSH/防火墙/Docker/备份/监控/优化]"
                 "退出装机向导 (Exit Setup Wizard)      [退出程序]"
             )
             local item_choice=""
-            if ! tui_menu_select item_choice "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单" "请选择操作模式 (↑/↓ 移动, Enter 确认, 1-8 秒选):" 1 "${menu_items[@]}"; then
+            if ! tui_menu_select item_choice "VPS 一键装机 v${VPS_TOOL_VERSION} — 主菜单" "请选择操作模式 (↑/↓ 移动, Enter 确认, 1-9 秒选):" 1 "${menu_items[@]}"; then
                 log_info "用户取消退出系统。"
                 exit 0
             fi
@@ -1018,6 +1021,7 @@ show_main_menu() {
                 "加载"*) choice="4" ;;
                 "配置体检"*) choice="7" ;;
                 "查看模块"*) choice="6" ;;
+                "查看常用系统配置"*) choice="8" ;;
                 "开始"*) choice="5" ;;
                 "退出"*) choice="0" ;;
                 *) choice="1" ;;
@@ -1032,10 +1036,11 @@ show_main_menu() {
             echo -e "  \033[1;36m│\033[0m   5) 开始执行安装 (Start Installation)"
             echo -e "  \033[1;36m│\033[0m   6) 查看模块执行状态 (Check Module Status)"
             echo -e "  \033[1;36m│\033[0m   7) 查看配置体检报告 (Health Report)"
+            echo -e "  \033[1;36m│\033[0m   8) 查看常用系统配置 (Inspect System Configuration)"
             echo -e "  \033[1;36m│\033[0m   0) 退出程序 (Exit)"
             echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
-            read -r -p "  请选择 [0-7] (默认: 1): " choice
+            read -r -p "  请选择 [0-8] (默认: 1): " choice
             choice="${choice:-1}"
         fi
 
@@ -1086,12 +1091,15 @@ show_main_menu() {
                     read -rp "按任意键返回主菜单..." -n1
                 fi
                 ;;
+            8)
+                view_config_menu
+                ;;
             0|q|exit)
                 log_info "用户退出系统。"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}请输入有效的数字选项 [0-6]${NC}"
+                echo -e "${RED}请输入有效的数字选项 [0-8]${NC}"
                 ;;
         esac
     done
@@ -1231,14 +1239,19 @@ while [[ $# -gt 0 ]]; do
   --modules <list>        仅执行指定模块，逗号分隔 (例如: 01_hostname,05_ssh)
   --rollback              回滚已完成的更改（恢复备份的配置文件）
   --status                显示各模块的执行状态
-    --health                查看最近一次配置体检报告
+  --health                查看最近一次配置体检报告
+  --view [section]        查看常用系统配置 (可选: all, user, ssh, firewall, docker, backup, monitoring, optimization)
+  --show-config [section] 同 --view
 
 示例:
   sudo $0                 # 交互式向导
   sudo $0 -n -d           # 非交互试运行
   sudo $0 -a              # 全自动默认配置安装
   sudo $0 --status        # 查看模块状态
-    sudo $0 --health        # 查看最近配置体检报告
+  sudo $0 --health        # 查看最近配置体检报告
+  sudo $0 --view          # 查看全部常用系统配置
+  sudo $0 --view ssh      # 仅查看 SSH 安全配置
+  sudo $0 --view docker   # 仅查看 Docker 容器配置
 EOF
             exit 0
             ;;
@@ -1282,6 +1295,16 @@ EOF
             ACTION="health"
             shift
             ;;
+        --view|--show-config)
+            ACTION="view_config"
+            if [ -n "${2:-}" ] && [[ ! "$2" =~ ^- ]]; then
+                VIEW_SECTION="$2"
+                shift 2
+            else
+                VIEW_SECTION="all"
+                shift
+            fi
+            ;;
         *)
             echo "未知选项: $1"
             echo "使用 -h 查看帮助"
@@ -1299,6 +1322,8 @@ if [ "$ACTION" = "status" ]; then
     MODE_LABEL="状态查询"
 elif [ "$ACTION" = "health" ]; then
     MODE_LABEL="配置体检报告"
+elif [ "$ACTION" = "view_config" ]; then
+    MODE_LABEL="系统配置查看"
 elif [ "$ACTION" = "rollback" ]; then
     MODE_LABEL="回滚"
 elif [ "$DRY_RUN" = true ] && [ "$NON_INTERACTIVE" = true ]; then
@@ -1354,6 +1379,10 @@ case "$ACTION" in
     health)
         show_latest_health_report
         exit $?
+        ;;
+    view_config)
+        view_config_by_name "${VIEW_SECTION:-all}"
+        exit 0
         ;;
     rollback)
         log_info "开始回滚操作..."

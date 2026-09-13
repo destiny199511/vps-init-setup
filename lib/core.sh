@@ -27,7 +27,7 @@ if [ -f "${SCRIPT_ROOT}/lib/i18n.sh" ]; then
 fi
 
 # 确保核心目录存在
-mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}"
+mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}" 2>/dev/null || true
 
 # --- 日志文件 ---
 SESSION_ID="$(date +%Y%m%d_%H%M%S)"
@@ -57,7 +57,7 @@ log() {
     local level="$1"; shift
     local msg="$*"
     local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    echo "[${timestamp}] [${level}] ${msg}" >> "${LOG_FILE}"
+    echo "[${timestamp}] [${level}] ${msg}" >> "${LOG_FILE}" 2>/dev/null || true
 }
 
 log_info()  { log "INFO" "$*"; echo -e "${GREEN}[INFO]${NC} $*"; }
@@ -75,7 +75,7 @@ log_ok()    { log "OK" "$*"; echo -e "${GREEN}[OK]${NC} $*"; }
 audit() {
     local action_code="$1"; shift
     local detail="$*"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') | ${action_code} | ${detail}" >> "${AUDIT_LOG}"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | ${action_code} | ${detail}" >> "${AUDIT_LOG}" 2>/dev/null || true
 }
 
 #===============================================================================
@@ -731,7 +731,7 @@ print_kv() {
     local key="$1"
     local value="$2"
     local color="${3:-$CYAN}"
-    printf "  \033[1;36m│\033[0m  ${color}%-16s\033[0m %s\n" "${key}" "${value}"
+    printf "  \033[1;36m│\033[0m  ${color}%-16s\033[0m %b\n" "${key}" "${value}"
 }
 
 # print_module_progress: 模块执行进度行
@@ -925,6 +925,7 @@ print_completion_card() {
 
     echo ""
     echo -e "$(t '  \033[1;36m╭─ \033[1;37m常用快捷命令\033[1;36m ──────────────────────────────────────────\033[0m')"
+    echo -e "$(t '  \033[1;36m│\033[0m  查看系统配置:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh --view\033[0m')"
     echo -e "$(t '  \033[1;36m│\033[0m  查看模块状态:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh --status\033[0m')"
     echo -e "$(t '  \033[1;36m│\033[0m  仅执行单模块:  \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -n --modules 05_ssh\033[0m')"
     echo -e "$(t '  \033[1;36m│\033[0m  试运行预览:    \033[1;37msudo ${SCRIPT_ROOT}/vps_setup.sh -d -n\033[0m')"
@@ -1220,7 +1221,8 @@ init_system() {
 
 # print_startup_banner: 启动页
 print_startup_banner() {
-    local mode_label="$(t '${1:-交互式配置向导}')"
+    local raw_label="${1:-交互式配置向导}"
+    local mode_label="$(t "$raw_label")"
     echo ""
     echo -e "  \033[1;36m╭──────────────────────────────────────────────────────────╮\033[0m"
     echo -e "$(t '  \033[1;36m│\033[0m  \033[1;37m❖ VPS 一键装机 v${VPS_TOOL_VERSION}\033[0m')"

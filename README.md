@@ -42,6 +42,7 @@ sudo ./vps_setup.sh
 5. 开始执行安装。
 6. 查看模块状态。
 7. 查看最近的配置体检报告。
+8. 查看常用系统配置（用户、SSH、防火墙、Docker、备份、监控、内核等状态）。
 
 向导中可直接按 `Enter` 使用默认值，按 `b`、`Esc` 返回上一步；支持方向键、`j`/`k` 和数字键选择菜单项。终端宽度至少 60 列且为 TTY 时使用卡片式界面，否则自动降级为文本菜单。
 
@@ -76,6 +77,22 @@ sudo ./vps_setup.sh --health
 ```
 
 报告会比对目标配置与当前系统状态，并输出通过、提示、失败计数；文件保存在 `logs/health_report_*.txt`。
+
+查看常用系统配置与实时状态：
+
+```bash
+# 查看全部常用配置（用户/SSH/防火墙/Docker/备份/监控/优化内核）
+sudo ./vps_setup.sh --view
+
+# 仅查看指定分类配置
+sudo ./vps_setup.sh --view user
+sudo ./vps_setup.sh --view ssh
+sudo ./vps_setup.sh --view firewall
+sudo ./vps_setup.sh --view docker
+sudo ./vps_setup.sh --view backup
+sudo ./vps_setup.sh --view monitoring
+sudo ./vps_setup.sh --view optimization
+```
 
 其他常用检查：
 
@@ -112,6 +129,7 @@ tail -f logs/vps_setup_*.log
 --modules <list>        仅执行指定模块，如 01_hostname,05_ssh
 --status                显示模块执行状态
 --health                查看最近一次配置体检报告
+--view, --show-config   查看常用系统配置 (可选: all, user, ssh, firewall, docker, backup, monitoring, optimization)
 ```
 
 完整参数说明请运行：
@@ -126,6 +144,12 @@ sudo ./vps_setup.sh --help
 curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
   | sudo bash -s -- --ref main --update-only
 ```
+
+`install.sh` 支持的常用参数：
+- `--ref <tag|branch>`：指定安装版本或分支（默认最新 Release 或 `VERSION` 中版本）。
+- `--sha256 <hash>`：指定期望的归档包 SHA-256 校验和（生产加固推荐）。
+- `--insecure-skip-verify`：当 Release 校验和文件不存在或无法下载时跳过校验。
+- `--update-only`：仅同步更新脚本与模块文件，不自动启动配置向导。
 
 更新会保留 `config/`、`logs/` 与 `backups/`。关键文件：
 
