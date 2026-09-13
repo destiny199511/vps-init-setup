@@ -373,11 +373,47 @@ tui_card_input() {
     stty echo icanon 2>/dev/null || true
 
     if [ "$is_password" = "true" ]; then
-        if ! read -rsp "$(echo -e "$prompt_label")" answer; then
-            echo ""
+        printf '%b' "$prompt_label"
+        local char=""
+        local enter_received=false
+        stty -echo 2>/dev/null || true
+        while IFS= read -r -s -n 1 char; do
+            if [ -z "$char" ] || [ "$char" = $'\n' ] || [ "$char" = $'\r' ]; then
+                enter_received=true
+                break
+            fi
+            if [ "$char" = $'\x03' ] || [ "$char" = $'\x04' ]; then
+                echo ""
+                stty echo icanon 2>/dev/null || true
+                return 2
+            fi
+            if [ "$char" = $'\x7f' ] || [ "$char" = $'\x08' ]; then
+                if [ ${#answer} -gt 0 ]; then
+                    answer="${answer%?}"
+                    printf '\b \b'
+                fi
+            elif [ "$char" = $'\x15' ]; then
+                while [ ${#answer} -gt 0 ]; do
+                    printf '\b \b'
+                    answer="${answer%?}"
+                done
+            elif [ "$char" = $'\x1b' ]; then
+                local esc_seq=""
+                read -r -s -n 2 -t 0.05 esc_seq 2>/dev/null || true
+                if [[ "$esc_seq" =~ ^\[[0-9]+$ ]]; then
+                    read -r -s -n 1 -t 0.05 _ 2>/dev/null || true
+                fi
+                continue
+            else
+                answer+="$char"
+                printf '*'
+            fi
+        done
+        echo ""
+        stty echo icanon 2>/dev/null || true
+        if [ "$enter_received" != "true" ]; then
             return 2
         fi
-        echo ""
     else
         if ! read -re -p "$(echo -e "$prompt_label")" answer; then
             return 2
@@ -393,6 +429,14 @@ tui_card_input() {
     fi
 
     printf -v "$__var" '%s' "$answer"
-    echo -e "    ${TUI_OK}✔${TUI_RESET} ${TUI_DIM}已设置:${TUI_RESET} ${TUI_WHITE}$([ "$is_password" = "true" ] && echo "******" || echo "$answer")${TUI_RESET}\n"
+    local display_val="$answer"
+    if [ "$is_password" = "true" ]; then
+        local plen=${#answer}
+        [ "$plen" -eq 0 ] && plen=6
+        local stars
+        printf -v stars '%*s' "$plen" ''
+        display_val="${stars// /*}"
+    fi
+    echo -e "    ${TUI_OK}✔${TUI_RESET} ${TUI_DIM}已设置:${TUI_RESET} ${TUI_WHITE}${display_val}${TUI_RESET}\n"
     return 0
 }

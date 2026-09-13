@@ -129,7 +129,59 @@ test_tui_eof_cancellation() {
         else
             [ "$?" -eq 2 ]
         fi
+        if tui_card_input value "Test" "Test prompt" "" "" true </dev/null >/dev/null; then
+            return 1
+        else
+            [ "$?" -eq 2 ]
+        fi
     ) || fail "TUI EOF cancellation"
+}
+
+test_tui_card_input_password_masking() {
+    python3 - << 'EOF' || fail "TUI password masking failed"
+import pty, os, time, sys
+
+master, slave = pty.openpty()
+pid = os.fork()
+if pid == 0:
+    os.close(master)
+    os.dup2(slave, 0)
+    os.dup2(slave, 1)
+    os.dup2(slave, 2)
+    os.close(slave)
+    bash_code = """
+        source lib/core.sh
+        source lib/common.sh
+        source lib/tui.sh
+        pwd_val=""
+        tui_card_input pwd_val "安全凭据" "请输入密码" "" "" true
+        echo "RESULT:$pwd_val"
+    """
+    os.execlp('bash', 'bash', '-c', bash_code)
+else:
+    os.close(slave)
+    time.sleep(0.1)
+    # 输入 pass, 退格两次, 输入 word, 回车
+    os.write(master, b"pass\x7f\x7fword\n")
+    time.sleep(0.2)
+    out = b""
+    while True:
+        try:
+            chunk = os.read(master, 1024)
+            if not chunk:
+                break
+            out += chunk
+        except OSError:
+            break
+    os.close(master)
+    _, status = os.waitpid(pid, 0)
+    text = out.decode("utf-8", errors="replace")
+    if "RESULT:paword" not in text:
+        sys.exit(1)
+    # 验证打字时包含星号掩码
+    if "******" not in text:
+        sys.exit(1)
+EOF
 }
 
 test_apt_lock_wait_guard() {
@@ -255,6 +307,16 @@ test_rollback_cli_guard() {
     echo "$output" | grep -Fq "无可回滚的文件" || fail "rollback without registry should report no files"
 }
 
+test_health_report_cli() {
+    local isolated_repo="$SANDBOX_DIR/health-report-guard"
+    cp -a "$ROOT_DIR" "$isolated_repo"
+    local output
+    output=$("$isolated_repo/vps_setup.sh" --health 2>&1)
+    echo "$output" | grep -Fq "VPS 实际生效状态" || fail "--health missing live system state section"
+    echo "$output" | grep -Fq "配置体检报告" || fail "--health missing health report section"
+    echo "$output" | grep -Fq "配置检视指引" || fail "--health missing config inspection guidance"
+}
+
 test_view_config_cli() {
     local isolated_repo="$SANDBOX_DIR/view-config-guard"
     cp -a "$ROOT_DIR" "$isolated_repo"
@@ -282,6 +344,7 @@ test_module_source_guard
 test_tui_engine_load
 test_tui_noninteractive_fallback
 test_tui_eof_cancellation
+test_tui_card_input_password_masking
 test_apt_lock_wait_guard
 test_apply_config_defaults_completeness
 test_i18n_translation_and_fallbacks
@@ -289,6 +352,7 @@ test_i18n_variable_interpolation
 test_eval_elimination_in_user_module
 test_root_guard
 test_rollback_cli_guard
+test_health_report_cli
 test_view_config_cli
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip

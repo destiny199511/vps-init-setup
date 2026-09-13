@@ -1167,12 +1167,13 @@ print_health_report() {
 show_latest_health_report() {
     print_actual_vps_status false
     echo ""
-    log_info "$(t '正在执行系统实际配置与健康状态实时核验...')"
+    log_info "$(t '正在执行系统期望配置与实际状态偏差核验...')"
     HEALTH_CHECK_ALL=true print_health_report false || true
-    echo ""
-    if declare -F view_config_all >/dev/null 2>&1; then
-        view_config_all
-    fi
+    echo -e "  \033[1;36m╭─ \033[1;37m$(t '配置检视指引')\033[1;36m ──────────────────────────────────────────\033[0m"
+    echo -e "  \033[1;36m│\033[0m  \033[1;33m$(t '提示:')\033[0m $(t '如需深度查看各子系统(用户/SSH/防火墙/Docker等)的具体配置文件与参数细节:')"
+    echo -e "  \033[1;36m│\033[0m   ▸ $(t '主菜单选择:') \033[1;37m8. $(t '常用系统配置深度检视')\033[0m"
+    echo -e "  \033[1;36m│\033[0m   ▸ $(t '快捷命令:')   \033[1;36msudo ${SCRIPT_ROOT:-/opt/vps-init-setup}/vps_setup.sh --view [section]\033[0m"
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m\n"
     return 0
 }
 

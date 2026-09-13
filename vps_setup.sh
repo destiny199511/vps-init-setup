@@ -107,7 +107,7 @@ prompt_or_default() {
         printf -v "$__var" '%s' "${!__env:-$__default}"
         return 0
     elif tui_is_supported; then
-        tui_card_input "$__var" "VPS 装机配置录入" "$__prompt" "${!__env:-$__default}" "" false
+        tui_card_input "$__var" "$(t 'VPS 装机配置录入')" "$__prompt" "${!__env:-$__default}" "" false
         return $?
     else
         local answer
@@ -203,7 +203,7 @@ password_box() {
         printf -v "$__var" '%s' ""
         return 0
     elif tui_is_supported; then
-        tui_card_input "$__var" "安全凭据设置" "$prompt" "" "输入密码时字符将掩码显示" true
+        tui_card_input "$__var" "$(t '安全凭据设置')" "$prompt" "" "$(t '输入密码时字符将掩码显示')" true
         return $?
     else
         local password
@@ -1005,8 +1005,8 @@ show_main_menu() {
                 "加载 / 重置配置 (Manage Config File)  [重置或重新读取]"
                 "开始执行安装 (Start Installation)     [确认并立即执行]"
                 "查看模块状态 (Check Module Status)    [查询完成清单]"
-                "查看配置体检与实际状态 (Health Report & Live State) [实时核验]"
-                "查看常用系统配置 (Inspect System Config) [用户/SSH/防火墙/Docker/备份/监控/优化]"
+                "配置健康体检与偏差核验 (Health Audit & Validation) [核对期望与实机偏差]"
+                "常用系统配置深度检视 (Inspect System Config)     [查看用户/SSH/防火墙/Docker等细节]"
                 "退出装机向导 (Exit Setup Wizard)      [退出程序]"
             )
             local item_choice=""
@@ -1019,8 +1019,8 @@ show_main_menu() {
                 *"模块化"*|*"Section"*) choice="2" ;;
                 *"预览"*|*"Review"*) choice="3" ;;
                 *"加载"*|*"Manage Config"*) choice="4" ;;
-                *"配置体检"*|*"Health Report"*|*"实际状态"*) choice="7" ;;
-                *"常用系统配置"*|*"Inspect System"*) choice="8" ;;
+                *"健康体检"*|*"偏差核验"*|*"Health Audit"*|*"Validation"*) choice="7" ;;
+                *"深度检视"*|*"Inspect System"*|*"常用系统配置"*) choice="8" ;;
                 *"查看模块"*|*"Module Status"*) choice="6" ;;
                 *"开始"*|*"Installation"*) choice="5" ;;
                 *"退出"*|*"Exit"*) choice="0" ;;
@@ -1035,8 +1035,8 @@ show_main_menu() {
             echo -e "  \033[1;36m│\033[0m   4) 加载 / 重置配置文件 (Manage Config File)"
             echo -e "  \033[1;36m│\033[0m   5) 开始执行安装 (Start Installation)"
             echo -e "  \033[1;36m│\033[0m   6) 查看模块执行状态 (Check Module Status)"
-            echo -e "  \033[1;36m│\033[0m   7) 查看配置体检与实际状态 (Health Report & Live State)"
-            echo -e "  \033[1;36m│\033[0m   8) 查看常用系统配置 (Inspect System Configuration)"
+            echo -e "  \033[1;36m│\033[0m   7) 配置健康体检与偏差核验 (Health Audit & Validation)"
+            echo -e "  \033[1;36m│\033[0m   8) 常用系统配置深度检视 (Inspect System Configuration)"
             echo -e "  \033[1;36m│\033[0m   0) 退出程序 (Exit)"
             echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
@@ -1239,8 +1239,8 @@ while [[ $# -gt 0 ]]; do
   --modules <list>        仅执行指定模块，逗号分隔 (例如: 01_hostname,05_ssh)
   --rollback              回滚已完成的更改（恢复备份的配置文件）
   --status                显示各模块的执行状态
-  --health                查看最近一次配置体检报告
-  --view [section]        查看常用系统配置 (可选: all, user, ssh, firewall, docker, backup, monitoring, optimization)
+  --health                对系统当前配置进行健康体检并输出基线偏差报告
+  --view [section]        深度检视系统各子系统配置细节 (可选: all, user, ssh, firewall, docker, backup, monitoring, optimization)
   --show-config [section] 同 --view
 
 示例:
@@ -1248,10 +1248,10 @@ while [[ $# -gt 0 ]]; do
   sudo $0 -n -d           # 非交互试运行
   sudo $0 -a              # 全自动默认配置安装
   sudo $0 --status        # 查看模块状态
-  sudo $0 --health        # 查看最近配置体检报告
-  sudo $0 --view          # 查看全部常用系统配置
-  sudo $0 --view ssh      # 仅查看 SSH 安全配置
-  sudo $0 --view docker   # 仅查看 Docker 容器配置
+  sudo $0 --health        # 配置健康体检与基线偏差报告
+  sudo $0 --view          # 深度检视全部系统配置
+  sudo $0 --view ssh      # 仅检视 SSH 安全配置
+  sudo $0 --view docker   # 仅检视 Docker 容器环境配置
 EOF
             exit 0
             ;;
