@@ -288,7 +288,10 @@ firewall_main() {
             # Ensure firewalld is installed
             if ! command -v firewall-cmd >/dev/null 2>&1; then
                 log_info "Installing firewalld..."
-                install_package firewalld
+                if ! install_package firewalld; then
+                    log_error "Failed to install firewalld package"
+                    return 1
+                fi
             fi
             
             # Start and enable firewalld
@@ -342,6 +345,15 @@ firewall_main() {
             
         iptables)
             log_info "Configuring iptables firewall..."
+            
+            # Ensure iptables tools are installed
+            if ! command -v iptables >/dev/null 2>&1; then
+                log_info "Installing iptables..."
+                if ! install_package iptables; then
+                    log_error "Failed to install iptables package"
+                    return 1
+                fi
+            fi
             
             # Preserve existing rules and Docker chains; only add missing
             # baseline rules required for this setup.
@@ -444,6 +456,15 @@ firewall_main() {
             
         nftables)
             log_info "Configuring nftables firewall..."
+
+            # Ensure nftables is installed
+            if ! command -v nft >/dev/null 2>&1; then
+                log_info "Installing nftables..."
+                if ! install_package nftables; then
+                    log_error "Failed to install nftables package"
+                    return 1
+                fi
+            fi
 
             local nft_config="/etc/nftables.conf"
             local nft_marker="# Managed by vps-init-setup"
