@@ -247,12 +247,20 @@ view_config_firewall() {
     print_kv "$(t '防火墙引擎:')" "$fw_type"
     print_kv "$(t '防火墙状态:')" "$fw_status"
     
-    # 默认策略
+    # 默认策略与规则概要
     if [ "$fw_type" = "UFW" ]; then
         local ufw_in ufw_out
         ufw_in=$(ufw status verbose 2>/dev/null | grep -i "Default:" | awk '{print $2}' || true)
         ufw_out=$(ufw status verbose 2>/dev/null | grep -i "Default:" | awk '{print $4}' || true)
         [ -n "$ufw_in" ] && print_kv "$(t '默认出入站策略:')" "Incoming: $ufw_in, Outgoing: $ufw_out"
+    elif [ "$fw_type" = "Firewalld" ] && firewall-cmd --state >/dev/null 2>&1; then
+        local def_zone
+        def_zone=$(firewall-cmd --get-default-zone 2>/dev/null || true)
+        [ -n "$def_zone" ] && print_kv "$(t '默认区域 (Zone):')" "$def_zone"
+    elif [ "$fw_type" = "iptables" ]; then
+        local ipt_in
+        ipt_in=$(iptables -S INPUT 2>/dev/null | head -n1 | sed 's/-P INPUT //' || true)
+        [ -n "$ipt_in" ] && print_kv "$(t 'INPUT 默认策略:')" "$ipt_in"
     fi
     
     # 开放的防火墙规则概要
