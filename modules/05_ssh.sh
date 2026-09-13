@@ -291,6 +291,11 @@ ssh_main() {
                     firewall-cmd --permanent --add-port="$migration_port"/tcp >/dev/null 2>&1 || true
                     firewall-cmd --reload >/dev/null 2>&1 || true
                     ;;
+                nftables)
+                    if nft list chain inet vps_init_setup input >/dev/null 2>&1; then
+                        nft add rule inet vps_init_setup input tcp dport "$migration_port" ct state new accept >/dev/null 2>&1 || true
+                    fi
+                    ;;
                 iptables) iptables -C INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || true ;;
             esac
         done
@@ -483,6 +488,11 @@ ssh_main() {
                         firewall-cmd --permanent --add-port="$migration_port"/tcp >/dev/null 2>&1 || true
                         firewall-cmd --reload >/dev/null 2>&1 || true
                         ;;
+                    nftables)
+                        if nft list chain inet vps_init_setup input >/dev/null 2>&1; then
+                            nft add rule inet vps_init_setup input tcp dport "$migration_port" ct state new accept >/dev/null 2>&1 || true
+                        fi
+                        ;;
                     iptables) iptables -C INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$migration_port" -j ACCEPT 2>/dev/null || true ;;
                 esac
             done
@@ -490,6 +500,12 @@ ssh_main() {
                 case "$(detect_firewall)" in
                     ufw) ufw delete allow "$current_port"/tcp 2>/dev/null || true ;;
                     firewalld) firewall-cmd --remove-port="$current_port"/tcp --permanent 2>/dev/null || true; firewall-cmd --reload >/dev/null 2>&1 || true ;;
+                    nftables)
+                        # Remove legacy rule if present in managed table
+                        local rule_handle
+                        rule_handle=$(nft -a list chain inet vps_init_setup input 2>/dev/null | awk -v port="$current_port" '$0 ~ "tcp dport " port " " && /handle/ {print $NF}' | head -n1 || true)
+                        [ -n "$rule_handle" ] && nft delete rule inet vps_init_setup input handle "$rule_handle" 2>/dev/null || true
+                        ;;
                     iptables) iptables -D INPUT -p tcp --dport "$current_port" -j ACCEPT 2>/dev/null || true ;;
                 esac
             else
