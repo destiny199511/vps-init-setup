@@ -173,7 +173,11 @@ backup_main() {
     if [ ! -d "$backup_destination" ]; then
         log_info "Creating backup directory: $backup_destination"
         mkdir -p "$backup_destination"
-        chmod 700 "$backup_destination"  # Restrict access
+    fi
+    chmod 700 "$backup_destination"  # Restrict access to root only
+
+    if [ "$backup_encryption" != "true" ]; then
+        log_warn "Backup encryption is disabled. Archives containing system configs will be stored unencrypted with strict 0600 permissions."
     fi
     
     # Install required packages
@@ -236,6 +240,7 @@ backup_main() {
         echo "}"
         echo ""
         echo "create_backup() {"
+        echo "    umask 077"
         echo "    local timestamp=\"\$(date +%Y%m%d_%H%M%S)\""
         echo "    local hostname=\"\$(hostname)\""
         echo "    local backup_file=\"\${BACKUP_DIR}/backup_\${hostname}_\${timestamp}.tar\""
@@ -248,6 +253,7 @@ backup_main() {
         echo "    if ! tar -cf \"\$backup_file\" -- \"\${sources[@]}\" 2>/dev/null; then"
         echo "        error_exit \"Failed to create tar archive\""
         echo "    fi"
+        echo "    chmod 600 \"\$backup_file\""
         echo ""
         echo "    # Compress if requested"
         echo "    case \"\$COMPRESSION\" in"

@@ -10,12 +10,38 @@
 # ===== 初始化 =====
 set -euo pipefail
 
+# 尽早检查 root 权限（在日志或文件初始化之前输出友好提示）
+if [ "${EUID:-$(id -u)}" -ne 0 ] && [ "${SKIP_ROOT_CHECK:-false}" != "true" ]; then
+    case "${1:-}" in
+        -h|--help|-v|--version)
+            ;;
+        *)
+            echo -e "\033[0;31m[ERROR]\033[0m 此脚本必须以 root 权限运行 (This script must be run as root)" >&2
+            echo "请使用: sudo bash $0" >&2
+            exit 1
+            ;;
+    esac
+fi
+
 # 脚本根目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/core.sh"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/tui.sh"
 cd "${SCRIPT_DIR}"
+
+# 全局退出与中断信号处理
+SETUP_COMPLETED=false
+cleanup_on_exit() {
+    local exit_code=$?
+    if [ "$exit_code" -ne 0 ] && [ "$SETUP_COMPLETED" != "true" ] && [ "${ACTION:-}" = "install" ]; then
+        echo -e "\n\033[1;33m[WARN]\033[0m 操作中断或异常退出 (退出代码: $exit_code)。" >&2
+        echo -e "如需回滚已备份的配置更改，可执行: \033[1;36msudo $0 --rollback\033[0m" >&2
+        echo -e "详细排查日志请查看: \033[1;36m${LOG_FILE:-${LOGS_DIR}}\033[0m\n" >&2
+    fi
+}
+trap cleanup_on_exit EXIT
+trap 'echo -e "\n\033[0;31m[ABORT]\033[0m 接收到中断信号 (SIGINT/SIGTERM)，正在退出..."; exit 130' INT TERM
 
 # HOSTNAME is commonly pre-populated by the shell; configuration must come from
 # VPS_SETUP_HOSTNAME, the config file, or the interactive wizard instead.
@@ -1331,7 +1357,48 @@ case "$ACTION" in
         ;;
     rollback)
         log_info "开始回滚操作..."
-        msg_box "回滚" "回滚功能尚未完全实现。\n请手动从备份目录恢复文件:\n${BACKUPS_DIR}"
+        if [ ! -f "${BACKUP_REGISTRY}" ] || [ ! -s "${BACKUP_REGISTRY}" ]; then
+            log_warn "未发现任何备份记录 (${BACKUP_REGISTRY})，无可回滚的文件。"
+            echo -e "${YELLOW}提示: 备份目录位于: ${BACKUPS_DIR}${NC}"
+            exit 0
+        fi
+
+        if [ "$NON_INTERACTIVE" != true ] && [ "${AUTO_YES:-false}" != true ]; then
+            local confirm_rollback=""
+            if tui_is_supported; then
+                tui_card_confirm "确认回滚" "确定要回滚所有已备份的系统配置文件吗？" false || {
+                    log_info "用户取消回滚操作。"
+                    exit 0
+                }
+            else
+                read -r -p "确定要回滚所有已备份的系统配置文件吗？[y/N]: " confirm_rollback
+                case "$confirm_rollback" in
+                    [yY][eE][sS]|[yY]) ;;
+                    *)
+                        log_info "用户取消回滚操作。"
+                        exit 0
+                        ;;
+                esac
+            fi
+        fi
+
+        rollback_all
+
+        # 清除模块执行状态
+        if [ -f "${CONFIG_DIR}/.state" ]; then
+            rm -f "${CONFIG_DIR}/.state"
+            log_info "已重置模块执行状态"
+        fi
+
+        # 验证核心服务配置语法并重载
+        if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then
+            systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || service ssh reload 2>/dev/null || true
+            log_ok "SSH 服务配置验证通过并已重新加载"
+        fi
+
+        log_ok "系统配置已成功回滚！"
+        echo -e "\n${GREEN}✔ 所有已备份的系统配置文件已恢复完毕。${NC}"
+        SETUP_COMPLETED=true
         exit 0
         ;;
     install)
@@ -1509,6 +1576,7 @@ fi
 # 完成卡片
 print_completion_card "${ELAPSED}" "${DRY_RUN}" "${SERVER_IP}" "${MODULE_SUMMARY_LINES}"
 
+SETUP_COMPLETED=true
 if { [ "$FAILED_COUNT" -gt 0 ] || [ "$HEALTH_CHECK_FAILED" = true ]; } && [ "$DRY_RUN" = false ]; then
     exit 1
 fi

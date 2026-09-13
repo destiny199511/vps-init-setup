@@ -107,14 +107,31 @@ monitoring_main() {
             esac
         fi
 
+        # Secure Netdata: bind only to localhost to prevent public exposure
+        mkdir -p /etc/netdata
+        if [ -f /etc/netdata/netdata.conf ]; then
+            if grep -q "bind to =" /etc/netdata/netdata.conf; then
+                sed -i 's/^[# ]*bind to =.*/bind to = 127.0.0.1/' /etc/netdata/netdata.conf
+            else
+                printf "\n[web]\n    bind to = 127.0.0.1\n" >> /etc/netdata/netdata.conf
+            fi
+        else
+            cat <<'EOF' > /etc/netdata/netdata.conf
+[web]
+    bind to = 127.0.0.1
+EOF
+        fi
+
         if ! systemctl enable --now netdata 2>/dev/null && ! service netdata start 2>/dev/null; then
             log_error "Netdata package installed but its service could not be started"
             return 1
         fi
+        systemctl restart netdata 2>/dev/null || service netdata restart 2>/dev/null || true
+
         if command -v netdata >/dev/null 2>&1 && systemctl is-active --quiet netdata; then
-            log_info "Netdata installed and running"
+            log_info "Netdata installed and running (bound to 127.0.0.1:19999)"
             changes_made=true
-            audit "MONITORING_NETDATA_INSTALLED" "port=19999"
+            audit "MONITORING_NETDATA_INSTALLED" "port=19999 bind=127.0.0.1"
         else
             log_error "Netdata is not available after package installation"
             return 1
@@ -127,17 +144,29 @@ monitoring_main() {
         case "$(detect_package_manager)" in
             apt|deb)
                 install_package prometheus-node-exporter
+                # Secure Node Exporter: bind only to localhost to prevent public exposure
+                if [ -d /etc/default ]; then
+                    echo 'ARGS="--web.listen-address=127.0.0.1:9100"' > /etc/default/prometheus-node-exporter
+                fi
                 if ! systemctl enable --now prometheus-node-exporter; then
                     log_error "Prometheus Node Exporter package installed but its service could not be started"
                     return 1
                 fi
+                systemctl restart prometheus-node-exporter 2>/dev/null || true
                 ;;
             dnf|yum|rpm)
                 install_package node_exporter
+                if [ -d /etc/default ]; then
+                    echo 'OPTIONS="--web.listen-address=127.0.0.1:9100"' > /etc/default/node_exporter 2>/dev/null || true
+                fi
+                if [ -d /etc/sysconfig ]; then
+                    echo 'OPTIONS="--web.listen-address=127.0.0.1:9100"' > /etc/sysconfig/node_exporter 2>/dev/null || true
+                fi
                 if ! systemctl enable --now node_exporter; then
                     log_error "Prometheus Node Exporter package installed but its service could not be started"
                     return 1
                 fi
+                systemctl restart node_exporter 2>/dev/null || true
                 ;;
             *)
                 log_error "Node Exporter must be installed from a signed distribution package repository on this OS"
@@ -145,8 +174,8 @@ monitoring_main() {
                 ;;
         esac
         changes_made=true
-        log_info "Prometheus Node Exporter installed on port 9100"
-        audit "MONITORING_PROMETHEUS_NODE_INSTALLED" "port=9100"
+        log_info "Prometheus Node Exporter installed on 127.0.0.1:9100"
+        audit "MONITORING_PROMETHEUS_NODE_INSTALLED" "port=9100 bind=127.0.0.1"
     fi
 
     if [ "$changes_made" = "true" ]; then

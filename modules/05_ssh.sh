@@ -318,7 +318,10 @@ ssh_main() {
         echo "PermitEmptyPasswords $permit_empty_passwords"
         echo "KbdInteractiveAuthentication no"
         echo "UsePAM yes"
-        echo "PubkeyAcceptedAlgorithms +ssh-rsa"
+        if [ "${SSH_ENABLE_LEGACY_RSA:-false}" = "true" ]; then
+            log_warn "Enabling deprecated ssh-rsa public key algorithm by request"
+            echo "PubkeyAcceptedAlgorithms +ssh-rsa"
+        fi
         echo ""
         
         # Security settings

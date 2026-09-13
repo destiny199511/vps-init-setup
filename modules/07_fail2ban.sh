@@ -85,26 +85,6 @@ fail2ban_main() {
             *) ignore_ips="$ignore_ips $detected_client_ip" ;;
         esac
     fi
-    for detected_client_ip in $(ss -tnH 2>/dev/null | awk -v ports="$ssh_ports" '
-        BEGIN { count = split(ports, wanted, ",") }
-        $1 == "ESTAB" {
-            local_port = $4
-            sub(/^.*:/, "", local_port)
-            for (i = 1; i <= count; i++) {
-                if (local_port == wanted[i]) {
-                    peer = $5
-                    sub(/^\[/, "", peer)
-                    sub(/\]:[0-9]+$/, "", peer)
-                    sub(/:[0-9]+$/, "", peer)
-                    print peer
-                }
-            }
-        }' | sort -u); do
-        case " $ignore_ips " in
-            *" $detected_client_ip "*) ;;
-            *) ignore_ips="$ignore_ips $detected_client_ip" ;;
-        esac
-    done
     log_info "Fail2ban SSH ports: $ssh_ports; ignore IPs: $ignore_ips"
 
     # Match the sshd process directly; unit names differ across Ubuntu builds

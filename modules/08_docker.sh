@@ -240,6 +240,30 @@ docker_main() {
     if [ "${NON_INTERACTIVE:-false}" = "true" ]; then
         install_method="${DOCKER_INSTALL_METHOD:-$install_method}"
     fi
+
+    # Map "official" to the distro-native package installation method
+    if [ "$install_method" = "official" ] || [ -z "$install_method" ]; then
+        case "$(detect_os_id)" in
+            ubuntu|debian)
+                install_method="apt"
+                ;;
+            centos|rhel|rocky|almalinux)
+                install_method="yum"
+                ;;
+            fedora)
+                install_method="dnf"
+                ;;
+            alpine)
+                install_method="apk"
+                ;;
+            arch)
+                install_method="pacman"
+                ;;
+            *)
+                install_method="apt"
+                ;;
+        esac
+    fi
     
     local changes_made=false
     
@@ -445,14 +469,19 @@ docker_main() {
         return 1
     fi
     
-    # Add current user to docker group (if not root and user specified)
-    if [ "$(id -u)" -ne 0 ] && [ -n "${SUDO_USER:-}" ]; then
-        local docker_user="${SUDO_USER}"
-        if ! groups "$docker_user" | grep -q '\bdocker\b'; then
-            log_info "Adding user $docker_user to docker group"
-            usermod -aG docker "$docker_user"
-            log_info "User $docker_user added to docker group (will take effect after relogin)"
-            changes_made=true
+    # Add user to docker group (requires explicit opt-in via DOCKER_ADD_USER=true)
+    local docker_target_user="${DOCKER_USER:-${SUDO_USER:-${USERNAME:-}}}"
+    if [ -n "$docker_target_user" ] && [ "$docker_target_user" != "root" ] && id "$docker_target_user" &>/dev/null; then
+        if [ "${DOCKER_ADD_USER:-false}" = "true" ]; then
+            log_warn "SECURITY WARNING: Adding user '$docker_target_user' to the docker group is equivalent to granting root permissions!"
+            if ! groups "$docker_target_user" 2>/dev/null | grep -q '\bdocker\b'; then
+                log_info "Adding user $docker_target_user to docker group"
+                usermod -aG docker "$docker_target_user"
+                log_info "User $docker_target_user added to docker group (will take effect after relogin)"
+                changes_made=true
+            fi
+        else
+            log_info "Skipping adding '$docker_target_user' to docker group to avoid privilege escalation (set DOCKER_ADD_USER=true to allow)"
         fi
     fi
     

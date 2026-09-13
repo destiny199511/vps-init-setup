@@ -10,6 +10,7 @@ Options:
   --ref REF           GitHub release tag or branch to install (default: ${REF})
   --install-dir DIR   Target directory (default: ${INSTALL_DIR})
   --sha256 SHA256     Expected archive SHA-256 (recommended for production)
+  --insecure-skip-verify Skip checksum verification if checksum file is unavailable
   --update-only       Update files without starting the setup wizard
   --help              Show this help
 
@@ -18,6 +19,7 @@ Environment variables:
   VPS_INIT_SETUP_REF
   VPS_INIT_SETUP_INSTALL_DIR
   VPS_INIT_SETUP_SHA256
+  VPS_INIT_SETUP_INSECURE_SKIP_VERIFY
 EOF
 }
 
@@ -33,6 +35,7 @@ REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-s
 INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
 REF="${VPS_INIT_SETUP_REF:-$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "latest")}"
 EXPECTED_SHA256="${VPS_INIT_SETUP_SHA256:-}"
+INSECURE_SKIP_VERIFY="${VPS_INIT_SETUP_INSECURE_SKIP_VERIFY:-false}"
 RUN_SETUP=true
 
 while [[ $# -gt 0 ]]; do
@@ -52,6 +55,10 @@ while [[ $# -gt 0 ]]; do
         --sha256)
             EXPECTED_SHA256="$2"
             shift 2
+            ;;
+        --insecure-skip-verify)
+            INSECURE_SKIP_VERIFY=true
+            shift
             ;;
         --update-only)
             RUN_SETUP=false
@@ -287,7 +294,14 @@ verify_release_checksum() {
         fi
         echo "Release checksum verified."
     else
-        echo "Note: upstream release checksum file is not available; skipping checksum verification."
+        if [ "$INSECURE_SKIP_VERIFY" = "true" ]; then
+            echo "Warning: upstream release checksum file is not available; skipping verification due to --insecure-skip-verify."
+        else
+            echo "Error: Release checksum file ($checksum_url) could not be downloaded and --sha256 was not specified."
+            echo "Refusing to install unverified package to prevent supply chain tampering."
+            echo "Specify --sha256 <hash> or pass --insecure-skip-verify to bypass verification."
+            exit 1
+        fi
     fi
 }
 

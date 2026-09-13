@@ -51,32 +51,33 @@ load_locale_data() {
 # 核心翻译函数 t "中文源文本"
 t() {
     local text="$1"
+    local result="$text"
     case "${UI_LANG:-zh}" in
         en)
             if [ -n "${I18N_EN["$text"]+x}" ]; then
-                printf '%s' "${I18N_EN["$text"]}"
-            else
-                printf '%s' "$text"
+                result="${I18N_EN["$text"]}"
             fi
             ;;
         ja)
             if [ -n "${I18N_JA["$text"]+x}" ]; then
-                printf '%s' "${I18N_JA["$text"]}"
-            else
-                printf '%s' "$text"
+                result="${I18N_JA["$text"]}"
             fi
             ;;
         es)
             if [ -n "${I18N_ES["$text"]+x}" ]; then
-                printf '%s' "${I18N_ES["$text"]}"
-            else
-                printf '%s' "$text"
+                result="${I18N_ES["$text"]}"
             fi
             ;;
-        zh|*)
-            printf '%s' "$text"
-            ;;
     esac
+
+    # 如果包含 ${VAR} 占位符，自动对当前 shell 环境中的对应变量进行安全替换展开
+    while [[ "$result" =~ (\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}) ]]; do
+        local full_match="${BASH_REMATCH[1]}"
+        local var_name="${BASH_REMATCH[2]}"
+        local var_val="${!var_name:-}"
+        result="${result//"$full_match"/$var_val}"
+    done
+    printf '%s' "$result"
 }
 
 # 设置界面语言

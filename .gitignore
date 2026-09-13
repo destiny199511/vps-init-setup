@@ -20,3 +20,10 @@ config/*
 
 profiles/*
 !profiles/.gitkeep
+
+# Audit and agent test reports
+audit/
+security-adversarial-report.md
+VPS-INIT-*.md
+*audit-report*.md
+*chaos-report*.md

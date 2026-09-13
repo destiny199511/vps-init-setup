@@ -37,6 +37,7 @@ test_access_guard() {
     if VPS_SETUP_USERNAME="vps-init-no-credential" \
         VPS_SETUP_PASSWORD_AUTH=no \
         VPS_SETUP_SSH_PUBKEY_AUTHENTICATION=yes \
+        SKIP_ROOT_CHECK=true \
         "$isolated_repo/vps_setup.sh" -n -a -f --modules 04_user,05_ssh >"$SANDBOX_DIR/access.out" 2>&1; then
         fail "access guard accepted an unusable SSH credential"
     fi
@@ -210,6 +211,43 @@ test_network_security_sysctl_generation() {
     ) || fail "network security sysctl module check"
 }
 
+test_i18n_variable_interpolation() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source lib/i18n.sh
+        count=42
+        [ "$(t '已恢复 ${count} 个文件')" = "已恢复 42 个文件" ]
+        set_ui_language en
+        [ "$(t '已恢复 ${count} 个文件')" = "Restored 42 files" ]
+    ) || fail "i18n variable interpolation"
+}
+
+test_eval_elimination_in_user_module() {
+    if grep -q 'eval.*\$username' "$ROOT_DIR/modules/04_user.sh"; then
+        fail "eval still present in modules/04_user.sh"
+    fi
+}
+
+test_root_guard() {
+    local isolated_repo="$SANDBOX_DIR/root-guard"
+    cp -a "$ROOT_DIR" "$isolated_repo"
+    local output
+    if output=$("$isolated_repo/vps_setup.sh" 2>&1); then
+        fail "vps_setup.sh should fail when run as non-root"
+    fi
+    echo "$output" | grep -Fq "必须以 root 权限运行" || fail "root guard missing friendly error message"
+}
+
+test_rollback_cli_guard() {
+    local isolated_repo="$SANDBOX_DIR/rollback-guard"
+    cp -a "$ROOT_DIR" "$isolated_repo"
+    local output
+    output=$(SKIP_ROOT_CHECK=true "$isolated_repo/vps_setup.sh" -n -a --rollback 2>&1)
+    echo "$output" | grep -Fq "无可回滚的文件" || fail "rollback without registry should report no files"
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
@@ -219,6 +257,10 @@ test_tui_eof_cancellation
 test_apt_lock_wait_guard
 test_apply_config_defaults_completeness
 test_i18n_translation_and_fallbacks
+test_i18n_variable_interpolation
+test_eval_elimination_in_user_module
+test_root_guard
+test_rollback_cli_guard
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
 test_network_security_sysctl_generation

@@ -122,7 +122,8 @@ user_main() {
         log_info "Setting up SSH access for user: $username"
         
         local user_home user_ssh_dir authorized_keys
-        user_home=$(eval echo "~$username")
+        user_home="$(getent passwd "$username" | cut -d: -f6)"
+        [ -z "$user_home" ] && user_home="/home/$username"
         user_ssh_dir="$user_home/.ssh"
         authorized_keys="$user_ssh_dir/authorized_keys"
         
@@ -198,6 +199,16 @@ user_main() {
         sudo_group=$(getent group sudo | cut -d: -f1)
         [ -z "$sudo_group" ] && sudo_group="wheel"  # RHEL/CentOS uses wheel
         
+        local sudo_nopasswd="${SUDO_NOPASSWD:-false}"
+        local sudo_rule
+        if [ "$sudo_nopasswd" = "true" ]; then
+            sudo_rule="$username ALL=(ALL) NOPASSWD:ALL"
+            log_warn "Configuring sudo with NOPASSWD for $username (Root privileges without password verification)"
+        else
+            sudo_rule="$username ALL=(ALL) ALL"
+            log_info "Configuring sudo with password verification for $username"
+        fi
+
         # Add to appropriate group
         case "$(detect_package_manager)" in
             apt|deb)
@@ -206,9 +217,9 @@ user_main() {
                     log_info "Added user to sudo group"
                     changes_made=true
                 fi
-                echo "$username ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$username"
+                echo "$sudo_rule" > "/etc/sudoers.d/$username"
                 chmod 440 "/etc/sudoers.d/$username"
-                log_info "Added user to sudoers file with NOPASSWD"
+                log_info "Configured sudoers rule for $username"
                 changes_made=true
                 ;;
             yum|dnf|rpm)
@@ -217,9 +228,9 @@ user_main() {
                     log_info "Added user to wheel group"
                     changes_made=true
                 fi
-                echo "$username ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$username"
+                echo "$sudo_rule" > "/etc/sudoers.d/$username"
                 chmod 440 "/etc/sudoers.d/$username"
-                log_info "Added user to sudoers file with NOPASSWD"
+                log_info "Configured sudoers rule for $username"
                 changes_made=true
                 ;;
             *)
@@ -229,9 +240,9 @@ user_main() {
                 elif getent group wheel >/dev/null 2>&1; then
                     usermod -aG wheel "$username"
                 fi
-                echo "$username ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$username"
+                echo "$sudo_rule" > "/etc/sudoers.d/$username"
                 chmod 440 "/etc/sudoers.d/$username"
-                log_info "Configured sudo access with NOPASSWD"
+                log_info "Configured sudo access for $username"
                 changes_made=true
                 ;;
         esac
@@ -242,7 +253,7 @@ user_main() {
             # Don't fail completely as this might be a false positive in some envs
         fi
         
-        audit "SUDO_CONFIGURED" "username=$username"
+        audit "SUDO_CONFIGURED" "username=$username nopasswd=$sudo_nopasswd"
     fi
     
     # Password authentication requires an actual password, even when public-key
@@ -262,18 +273,24 @@ user_main() {
                 log_info "Password set successfully"
                 changes_made=true
                 audit "USER_PASSWORD_SET" "username=$username"
+                unset user_password USER_PASSWORD
             else
                 log_error "Failed to set password for user: $username"
+                unset user_password USER_PASSWORD
                 return 1
             fi
         fi
     fi
+    unset user_password USER_PASSWORD
     
     # Final verification
     if id "$username" &>/dev/null; then
+        local final_home
+        final_home="$(getent passwd "$username" | cut -d: -f6)"
+        [ -z "$final_home" ] && final_home="/home/$username"
         log_info "User '$username' configured successfully"
         log_info "UID: $(id -u "$username"), GID: $(id -g "$username")"
-        log_info "Home: $(eval echo "~$username")"
+        log_info "Home: $final_home"
         if groups "$username" | grep -qE '\<(sudo|wheel)\>'; then
             log_info "Has sudo privileges"
         fi

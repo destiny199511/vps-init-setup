@@ -15,7 +15,15 @@ network_main() {
     log_info "Starting kernel network optimization..."
 
     # Determine settings (use configured values or defaults)
-    local ip_forward="${IP_FORWARD:-0}"
+    local ip_forward="${IP_FORWARD:-auto}"
+    if [ "$ip_forward" = "auto" ] || [ -z "$ip_forward" ]; then
+        if [ "${INSTALL_DOCKER:-false}" = "true" ] || command -v docker >/dev/null 2>&1; then
+            ip_forward="1"
+            log_info "Docker detected/enabled; setting ip_forward=1 for container networking"
+        else
+            ip_forward="0"
+        fi
+    fi
     local tcp_fin_timeout="${TCP_FIN_TIMEOUT:-30}"
     local tcp_keepalive_time="${TCP_KEEPALIVE_TIME:-1200}"
     local tcp_keepalive_intvl="${TCP_KEEPALIVE_INTVL:-30}"

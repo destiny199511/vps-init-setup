@@ -19,7 +19,9 @@ USER_FULLNAME 'Full name for the non-root user'
 USER_SHELL 'Login shell for the non-root user'
 CREATE_HOME 'Whether to create the user home directory (true/false)'
 ADD_TO_SUDO 'Whether to grant sudo access (true/false)'
+SUDO_NOPASSWD 'Allow non-root user sudo without password (true/false)'
 SETUP_SSH 'Whether to configure user SSH access (true/false)'
+SSH_ENABLE_LEGACY_RSA 'Whether to enable legacy ssh-rsa public key algorithm (true/false)'
 SSH_PERMIT_EMPTY_PASSWORDS 'Allow empty passwords via SSH (yes/no)'
 SSH_MAX_AUTH_TRIES 'Maximum authentication attempts'
 SSH_MAX_SESSIONS 'Maximum multiplexed sessions'
@@ -30,6 +32,7 @@ ALLOWED_PORTS 'Comma-separated list of additional ports to allow'
 HTTP_PORT 'HTTP port number'
 HTTPS_PORT 'HTTPS port number'
 INSTALL_DOCKER 'Whether to install Docker (true/false)'
+DOCKER_ADD_USER 'Whether to add non-root user to docker group (true/false)'
 INSTALL_NPM 'Whether to install NPM (Node Package Manager) (true/false)'
 DOCKER_INSTALL_METHOD 'Docker package-manager installation method'
 DOCKER_CGROUP_DRIVER 'Docker cgroup driver'
@@ -38,6 +41,7 @@ DOCKER_LOG_OPTS 'Docker log options'
 DOCKER_INSECURE_REGISTRIES 'Comma-separated Docker insecure registries'
 DOCKER_REGISTRY_MIRRORS 'Comma-separated Docker registry mirrors'
 DOCKER_LIVE_RESTORE 'Whether to enable Docker live restore (true/false)'
+IP_FORWARD 'Kernel IP forwarding (0 or 1, empty for auto)'
 DOMAIN 'Domain name for reverse proxy'
 INSTALL_NODE_EXPORTER 'Whether to install node exporter (true/false)'
 INSTALL_FAIL2BAN 'Whether to install Fail2ban (true/false)'
@@ -95,6 +99,17 @@ load_config() {
             config_mode="$(stat -c '%a' "$config_file" 2>/dev/null || true)"
             if [ "$config_owner" != "0" ] || [ -z "$config_mode" ] || (( (8#$config_mode) & 022 )); then
                 log_error "Refusing unsafe configuration file ownership or permissions: $config_file"
+                return 1
+            fi
+            local config_dir="$(dirname "$config_file")"
+            local dir_owner="$(stat -c '%u' "$config_dir" 2>/dev/null || true)"
+            local dir_mode="$(stat -c '%a' "$config_dir" 2>/dev/null || true)"
+            if [ -n "$dir_owner" ] && [ "$dir_owner" != "0" ]; then
+                log_error "Refusing configuration in non-root owned directory: $config_dir"
+                return 1
+            fi
+            if [ -n "$dir_mode" ] && (( (8#$dir_mode) & 022 )); then
+                log_error "Refusing configuration in group/world writable directory: $config_dir"
                 return 1
             fi
         fi
@@ -299,6 +314,7 @@ apply_config_defaults() {
     : "${USER_SHELL:=/bin/bash}"
     : "${CREATE_HOME:=true}"
     : "${ADD_TO_SUDO:=true}"
+    : "${SUDO_NOPASSWD:=false}"
     : "${SETUP_SSH:=true}"
     : "${HOSTNAME:=my-vps-server}"
     : "${TIMEZONE:=Asia/Shanghai}"
@@ -312,6 +328,7 @@ apply_config_defaults() {
     : "${SSH_PUBKEY_AUTHENTICATION:=yes}"
     : "${SSH_PUBKEY_AUTH:=yes}"
     : "${SSH_PUBKEY:=}"
+    : "${SSH_ENABLE_LEGACY_RSA:=false}"
     : "${SSH_PERMIT_EMPTY_PASSWORDS:=no}"
     : "${SSH_MAX_AUTH_TRIES:=3}"
     : "${SSH_MAX_SESSIONS:=10}"
@@ -322,6 +339,7 @@ apply_config_defaults() {
     : "${HTTP_PORT:=80}"
     : "${HTTPS_PORT:=443}"
     : "${INSTALL_DOCKER:=true}"
+    : "${DOCKER_ADD_USER:=false}"
     : "${DOCKER_INSTALL_METHOD:=official}"
     : "${DOCKER_CGROUP_DRIVER:=systemd}"
     : "${DOCKER_LOG_DRIVER:=json-file}"
@@ -329,6 +347,7 @@ apply_config_defaults() {
     : "${DOCKER_INSECURE_REGISTRIES:=}"
     : "${DOCKER_REGISTRY_MIRRORS:=}"
     : "${DOCKER_LIVE_RESTORE:=true}"
+    : "${IP_FORWARD:=auto}"
     : "${INSTALL_NPM:=false}"
     : "${DOMAIN:=example.com}"
     : "${INSTALL_FAIL2BAN:=true}"
