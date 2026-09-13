@@ -380,7 +380,7 @@ configure_user() {
     local password_confirmation=""
     local res=0
 
-    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 3 ]; do
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 4 ]; do
         case "$sub_step" in
             1)
                 res=0
@@ -436,22 +436,123 @@ configure_user() {
                 else
                     user_password=""
                 fi
+
                 if [ "$ssh_pubkey_auth" = "yes" ]; then
-                    input_box ssh_pubkey "请输入 SSH 公钥（仅公钥认证时不能为空）:" "$ssh_pubkey" || res=$?
-                    [ "$res" -eq 2 ] && { sub_step=2; continue; }
-                    if [ "$password_auth" != "yes" ] && ! printf '%s\n' "$ssh_pubkey" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
-                        echo -e "${RED}仅公钥认证必须提供有效 SSH 公钥；也可返回上一步改用密码认证。${NC}"
-                        # Prevent infinite loop when stdin is exhausted (non-interactive)
-                        if [ "$NON_INTERACTIVE" = true ] || [ ! -t 0 ]; then
-                            log_error "非交互模式下未提供有效 SSH 公钥，无法继续"
-                            return 1
-                        fi
-                        continue
-                    fi
+                    sub_step=4
                 else
                     ssh_pubkey=""
+                    sub_step=5
                 fi
-                sub_step=4
+                ;;
+            4)
+                res=0
+                echo -e "\n  ${CYAN}╭─ 🔐 SSH 公钥认证工作机制说明 ──────────────────────────────────────────╮${NC}"
+                echo -e "  ${CYAN}│${NC} • 服务端仅存放【公钥】(~/.ssh/authorized_keys)，用于会话验签。          ${CYAN}│${NC}"
+                echo -e "  ${CYAN}│${NC} • 对应的【私钥】保存在您的客户端本地电脑（如 Mac/Linux 的 ~/.ssh/）。   ${CYAN}│${NC}"
+                echo -e "  ${CYAN}│${NC} • 脚本不会在服务器上生成私钥；登录需使用本地私钥:                       ${CYAN}│${NC}"
+                echo -e "  ${CYAN}│${NC}   ${BOLD}ssh -i ~/.ssh/id_ed25519 -p <端口> ${username}@<IP>${NC}                     ${CYAN}│${NC}"
+                echo -e "  ${CYAN}╰────────────────────────────────────────────────────────────────────────╯${NC}"
+
+                # 自动探测系统现有公钥候选
+                local detected_key="" detected_source="" detected_desc=""
+                if [ -n "$ssh_pubkey" ] && printf '%s\n' "$ssh_pubkey" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
+                    detected_key="$ssh_pubkey"
+                    detected_source="当前配置或环境变量"
+                elif [ -n "${SUDO_USER:-}" ] && [ -s "/home/${SUDO_USER}/.ssh/authorized_keys" ]; then
+                    detected_key=$(grep -E '^(ssh-|ecdsa-sha2-)' "/home/${SUDO_USER}/.ssh/authorized_keys" 2>/dev/null | head -1 || true)
+                    detected_source="/home/${SUDO_USER}/.ssh/authorized_keys"
+                elif [ -s "/root/.ssh/authorized_keys" ]; then
+                    detected_key=$(grep -E '^(ssh-|ecdsa-sha2-)' "/root/.ssh/authorized_keys" 2>/dev/null | head -1 || true)
+                    detected_source="/root/.ssh/authorized_keys"
+                fi
+
+                local key_source_choice=""
+                local -a source_options=()
+                if [ -n "$detected_key" ]; then
+                    local ktype kcomment
+                    ktype=$(echo "$detected_key" | awk '{print $1}')
+                    kcomment=$(echo "$detected_key" | awk '{print $NF}')
+                    detected_desc="${ktype} ${kcomment} (源自 ${detected_source})"
+                    source_options+=("继承系统已有公钥 [${detected_desc}]")
+                fi
+                source_options+=(
+                    "手动粘贴公钥内容 (直接输入/粘贴以 ssh-ed25519 / ssh-rsa 等开头的公钥)"
+                    "从服务器文件导入 (输入服务器上的公钥文件路径，如 /path/to/key.pub)"
+                    "暂无可用公钥，改用密码认证 (稍后在客户端使用 ssh-copy-id 上传公钥)"
+                )
+
+                menu_select key_source_choice "SSH 公钥来源选择" "请选择 ${username} 的 SSH 公钥录入方式:" 1 "${source_options[@]}" || res=$?
+                if [ "$res" -eq 2 ]; then
+                    if [ "$password_auth" = "yes" ]; then
+                        sub_step=3
+                    else
+                        sub_step=2
+                    fi
+                    continue
+                fi
+
+                case "$key_source_choice" in
+                    *"继承系统已有公钥"*)
+                        ssh_pubkey="$detected_key"
+                        echo -e "    ${GREEN}✔${NC} ${DIM}已选用继承公钥:${NC} ${detected_desc}"
+                        sub_step=5
+                        ;;
+                    *"手动粘贴公钥内容"*)
+                        while true; do
+                            res=0
+                            input_box ssh_pubkey "请输入/粘贴 SSH 公钥 (例如 ssh-ed25519 AAAAC3...):" "$ssh_pubkey" || res=$?
+                            if [ "$res" -eq 2 ]; then
+                                break
+                            fi
+                            if printf '%s\n' "$ssh_pubkey" | grep -qE '^(ssh-|ecdsa-sha2-)'; then
+                                echo -e "    ${GREEN}✔${NC} ${DIM}公钥格式有效${NC}"
+                                sub_step=5
+                                break
+                            else
+                                echo -e "${RED}公钥格式不正确（必须以 ssh- 或 ecdsa-sha2- 开头），请重新输入。${NC}"
+                                if [ "$NON_INTERACTIVE" = true ] || [ ! -t 0 ]; then
+                                    return 1
+                                fi
+                            fi
+                        done
+                        ;;
+                    *"从服务器文件导入"*)
+                        local key_file_path="/root/.ssh/authorized_keys"
+                        while true; do
+                            res=0
+                            input_box key_file_path "请输入服务器上的公钥文件路径:" "$key_file_path" || res=$?
+                            if [ "$res" -eq 2 ]; then
+                                break
+                            fi
+                            if [ -f "$key_file_path" ] && [ -s "$key_file_path" ]; then
+                                local imported_key
+                                imported_key=$(grep -E '^(ssh-|ecdsa-sha2-)' "$key_file_path" 2>/dev/null | head -1 || true)
+                                if [ -n "$imported_key" ]; then
+                                    ssh_pubkey="$imported_key"
+                                    echo -e "    ${GREEN}✔${NC} ${DIM}成功从 ${key_file_path} 导入公钥${NC}"
+                                    sub_step=5
+                                    break
+                                else
+                                    echo -e "${RED}文件 ${key_file_path} 中未发现合法的 SSH 公钥。${NC}"
+                                fi
+                            else
+                                echo -e "${RED}文件不存在或为空: ${key_file_path}${NC}"
+                            fi
+                        done
+                        ;;
+                    *"暂无可用公钥"*)
+                        echo -e "    ${YELLOW}✔${NC} ${DIM}已切换为密码认证方案。${NC}"
+                        echo -e "    ${DIM}提示: 部署完成后，在本地电脑运行: ${BOLD}ssh-copy-id -p <端口> ${username}@<IP>${NC} ${DIM}即可一键注入公钥。${NC}"
+                        ssh_pubkey_auth="no"
+                        password_auth="yes"
+                        ssh_pubkey=""
+                        if [ -z "$user_password" ]; then
+                            sub_step=3
+                        else
+                            sub_step=5
+                        fi
+                        ;;
+                esac
                 ;;
         esac
     done
@@ -473,6 +574,7 @@ configure_ssh() {
 
     local sub_step=1
     local ssh_port="${SSH_PORT:-24822}"
+    local keep_legacy_port="${SSH_KEEP_LEGACY_PORT:-true}"
     local permit_root_login="${PERMIT_ROOT_LOGIN:-no}"
     local max_auth_tries="${SSH_MAX_AUTH_TRIES:-3}"
     local client_alive_interval="${SSH_CLIENT_ALIVE_INTERVAL:-300}"
@@ -480,7 +582,7 @@ configure_ssh() {
     local login_grace_time="${SSH_LOGIN_GRACE_TIME:-60}"
     local res=0
 
-    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 6 ]; do
+    while [ "$sub_step" -ge 1 ] && [ "$sub_step" -le 7 ]; do
         case "$sub_step" in
             1)
                 res=0
@@ -494,33 +596,68 @@ configure_ssh() {
                 ;;
             2)
                 res=0
+                local cur_sys_ports
+                cur_sys_ports=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2}' | paste -sd ' ' - || true)
+                cur_sys_ports="${cur_sys_ports:-22}"
+
+                if [ "$ssh_port" = "22" ]; then
+                    keep_legacy_port="false"
+                    sub_step=3
+                    continue
+                fi
+
+                echo -e "\n  ${YELLOW}╭─ 🛡️ SSH 端口变更与防失联保护 (Anti-Lockout) ──────────────────────╮${NC}"
+                echo -e "  ${YELLOW}│${NC} 您设置的新 SSH 端口为: ${BOLD}${GREEN}${ssh_port}${NC} (当前系统端口: ${cur_sys_ports})"
+                echo -e "  ${YELLOW}│${NC} ⚠ 高危提示: 若直接关闭旧端口，而云安全组未放行 ${ssh_port}，将导致彻底失联！"
+                echo -e "  ${YELLOW}╰────────────────────────────────────────────────────────────────────╯${NC}"
+
+                local legacy_choice=""
+                local default_idx=1
+                [ "$keep_legacy_port" = "false" ] && default_idx=2
+
+                menu_select legacy_choice "旧端口保留策略 (防失联二次确认)" "检测到 SSH 端口变更，请选择是否保留旧端口 (22):" "$default_idx" \
+                    "保留旧端口 (推荐: 双端口监听过渡防失联，待验证新端口连通后再关闭)" \
+                    "关闭旧端口 (直接关闭旧端口，仅监听新端口 ${ssh_port}；需确保安全组已放行)" || res=$?
+                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+
+                case "$legacy_choice" in
+                    *"保留旧端口"*)
+                        keep_legacy_port="true"
+                        echo -e "    ${GREEN}✔${NC} ${DIM}策略:${NC} 保留旧端口过渡，22 与 ${ssh_port} 端口同时可用。"
+                        ;;
+                    *"关闭旧端口"*)
+                        keep_legacy_port="false"
+                        echo -e "    ${YELLOW}✔${NC} ${DIM}策略:${NC} 彻底关闭旧端口，仅监听端口 ${ssh_port}。"
+                        ;;
+                esac
+                sub_step=3
+                ;;
+            3)
+                res=0
                 local root_choice=""
                 menu_select root_choice "Root 登录权限" "是否允许 root 用户通过 SSH 直接登录？" 1 \
                     "禁止 root 登录 (no) [推荐生产安全]" \
                     "允许 root 登录 (yes)" || res=$?
-                [ "$res" -eq 2 ] && { sub_step=1; continue; }
+                [ "$res" -eq 2 ] && {
+                    if [ "$ssh_port" = "22" ]; then
+                        sub_step=1
+                    else
+                        sub_step=2
+                    fi
+                    continue
+                }
                 if [[ "$root_choice" =~ "允许" ]]; then
                     permit_root_login="yes"
                 else
                     permit_root_login="no"
                 fi
-                sub_step=3
-                ;;
-            3)
-                res=0
-                input_box max_auth_tries "请输入最大认证尝试次数 (MaxAuthTries):" "$max_auth_tries" || res=$?
-                [ "$res" -eq 2 ] && { sub_step=2; continue; }
-                if ! validate_number "$max_auth_tries" 2>/dev/null; then
-                    echo -e "${RED}请输入有效数字。${NC}"
-                    continue
-                fi
                 sub_step=4
                 ;;
             4)
                 res=0
-                input_box client_alive_interval "请输入客户端保活间隔 (ClientAliveInterval, 秒):" "$client_alive_interval" || res=$?
+                input_box max_auth_tries "请输入最大认证尝试次数 (MaxAuthTries):" "$max_auth_tries" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=3; continue; }
-                if ! validate_number "$client_alive_interval" 2>/dev/null; then
+                if ! validate_number "$max_auth_tries" 2>/dev/null; then
                     echo -e "${RED}请输入有效数字。${NC}"
                     continue
                 fi
@@ -528,9 +665,9 @@ configure_ssh() {
                 ;;
             5)
                 res=0
-                input_box client_alive_count_max "请输入保活探测最大次数 (ClientAliveCountMax):" "$client_alive_count_max" || res=$?
+                input_box client_alive_interval "请输入客户端保活间隔 (ClientAliveInterval, 秒):" "$client_alive_interval" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=4; continue; }
-                if ! validate_number "$client_alive_count_max" 2>/dev/null; then
+                if ! validate_number "$client_alive_interval" 2>/dev/null; then
                     echo -e "${RED}请输入有效数字。${NC}"
                     continue
                 fi
@@ -538,18 +675,29 @@ configure_ssh() {
                 ;;
             6)
                 res=0
-                input_box login_grace_time "请输入登录宽限时间 (LoginGraceTime, 秒):" "$login_grace_time" || res=$?
+                input_box client_alive_count_max "请输入保活探测最大次数 (ClientAliveCountMax):" "$client_alive_count_max" || res=$?
                 [ "$res" -eq 2 ] && { sub_step=5; continue; }
-                if ! validate_number "$login_grace_time" 2>/dev/null; then
+                if ! validate_number "$client_alive_count_max" 2>/dev/null; then
                     echo -e "${RED}请输入有效数字。${NC}"
                     continue
                 fi
                 sub_step=7
                 ;;
+            7)
+                res=0
+                input_box login_grace_time "请输入登录宽限时间 (LoginGraceTime, 秒):" "$login_grace_time" || res=$?
+                [ "$res" -eq 2 ] && { sub_step=6; continue; }
+                if ! validate_number "$login_grace_time" 2>/dev/null; then
+                    echo -e "${RED}请输入有效数字。${NC}"
+                    continue
+                fi
+                sub_step=8
+                ;;
         esac
     done
 
     export SSH_PORT="$ssh_port"
+    export SSH_KEEP_LEGACY_PORT="$keep_legacy_port"
     export PERMIT_ROOT_LOGIN="$permit_root_login"
     export SSH_MAX_AUTH_TRIES="$max_auth_tries"
     export SSH_CLIENT_ALIVE_INTERVAL="$client_alive_interval"

@@ -205,7 +205,14 @@ ssh_main() {
     local needs_update=false
     changes_made=false
     
-    # Check port
+    # Check port & keep_legacy_port configuration consistency
+    local current_configured_ports
+    current_configured_ports=$(grep -E '^[# ]*Port ' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}' | sort -un | paste -sd ' ' - || true)
+    local desired_ports_sorted
+    desired_ports_sorted=$(echo "$ssh_ports" | tr ' ' '\n' | sort -un | paste -sd ' ' -)
+    if [ "$current_configured_ports" != "$desired_ports_sorted" ]; then
+        needs_update=true
+    fi
     if [ "$target_port" != "$current_port" ]; then
         needs_update=true
     fi
@@ -292,6 +299,21 @@ ssh_main() {
     # Ensure privilege separation directory exists
     mkdir -p /run/sshd
     chmod 0755 /run/sshd 2>/dev/null || true
+
+    # When keeping legacy port is disabled, ensure drop-in configs in /etc/ssh/sshd_config.d
+    # do not inadvertently re-open the legacy port (e.g. cloud-init's 50-cloud-init.conf).
+    if [ "$keep_legacy_port" = "false" ] && [ -d /etc/ssh/sshd_config.d ]; then
+        for conf_file in /etc/ssh/sshd_config.d/*.conf; do
+            [ -f "$conf_file" ] || continue
+            if grep -E '^[# ]*Port ' "$conf_file" 2>/dev/null | awk '{print $2}' | grep -qvE "^(${target_port})$"; then
+                log_info "Disabling legacy Port directive in $conf_file"
+                sed -i -E "s/^[# ]*Port[[:space:]]+(22|[0-9]+)/# Port \1 (disabled by vps-init-setup)/g" "$conf_file" || true
+            fi
+        done
+    fi
+
+    # Update systemd socket drop-ins if systemd socket units are in use
+    configure_ssh_socket_ports || true
 
     # Create new sshd_config
     {
