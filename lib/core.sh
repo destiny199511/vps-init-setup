@@ -214,6 +214,13 @@ detect_firewall() {
             fi
         fi
     fi
+    # On Debian/Ubuntu systems where UFW is available (even if inactive),
+    # treat UFW as the preferred managed firewall frontend over raw iptables backend.
+    if command -v ufw >/dev/null 2>&1 && [ -f /etc/os-release ] && \
+       grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu)' /etc/os-release 2>/dev/null; then
+        printf '%s\n' "ufw"
+        return 0
+    fi
     if command -v iptables >/dev/null 2>&1; then
         local iptables_rules
         iptables_rules="$(iptables-save 2>/dev/null | grep -vE 'DOCKER|docker0|br-|CNI-|KUBE-' || true)"
@@ -229,11 +236,6 @@ detect_firewall() {
         # iptables is still the available backend when the host has only the
         # default ACCEPT policy and no managed firewall is active.
         printf '%s\n' "iptables"
-        return 0
-    fi
-    if command -v ufw >/dev/null 2>&1 && [ -f /etc/os-release ] && \
-       grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu)' /etc/os-release 2>/dev/null; then
-        printf '%s\n' "ufw"
         return 0
     fi
     printf '%s\n' "none"

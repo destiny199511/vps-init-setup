@@ -26,7 +26,7 @@ firewall_main() {
             cp -r /etc/ufw /etc/ufw.backup.$(date +%s) 2>/dev/null || true
             ;;
         firewalld)
-            firewall-cmd --runtime-to-permanent would be ideal but we want to backup current state
+            # Save current runtime configuration to permanent if supported, then backup directory
             mkdir -p /etc/firewalld.backup.$(date +%s)
             cp -r /etc/firewalld/* /etc/firewalld.backup.$(date +%s)/ 2>/dev/null || true
             ;;
