@@ -375,6 +375,47 @@ test_ssh_legacy_port_and_pubkey_configuration() {
     ) || fail "ssh legacy port and pubkey configuration test failed"
 }
 
+test_user_password_configuration_and_cli() {
+    local isolated_repo="$SANDBOX_DIR/user-pwd-guard"
+    cp -a "$ROOT_DIR" "$isolated_repo"
+    local config_file="$isolated_repo/config/vps_config.conf"
+
+    # 1. Test saving and loading USER_PASSWORD
+    (
+        cd "$isolated_repo"
+        source lib/core.sh
+        source lib/common.sh
+        printf '%s\n' \
+            'USERNAME=testadm' \
+            'USER_PASSWORD=SecretPassword123' > "$config_file"
+        chmod 600 "$config_file"
+        load_config "$config_file"
+        [ "$USERNAME" = "testadm" ]
+        [ "$USER_PASSWORD" = "SecretPassword123" ]
+
+        # Test save_config preserves USER_PASSWORD
+        save_config "$config_file" $(get_config_var_names)
+        grep -q '^USER_PASSWORD=SecretPassword123$' "$config_file" || fail "USER_PASSWORD not saved to config"
+
+        # Test review card displays password status
+        PASSWORD_AUTH=no
+        local card_out
+        card_out=$(print_review_card 13)
+        echo "$card_out" | grep -Fq "已设本地密码" || fail "review card should display local password status"
+    ) || fail "user password config save and load test failed"
+
+    # 2. Test --help displays --set-password
+    local help_out
+    help_out=$("$isolated_repo/vps_setup.sh" --help 2>&1)
+    echo "$help_out" | grep -Fq -- "--set-password" || fail "--help missing --set-password"
+
+    # 3. Test --set-password in non-interactive mode without password errors gracefully
+    local err_out
+    if "$isolated_repo/vps_setup.sh" -n --set-password testadm >"$SANDBOX_DIR/pwd_err.out" 2>&1; then
+        fail "--set-password should fail when no password is provided in non-interactive mode"
+    fi
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
@@ -392,6 +433,7 @@ test_rollback_cli_guard
 test_health_report_cli
 test_view_config_cli
 test_ssh_legacy_port_and_pubkey_configuration
+test_user_password_configuration_and_cli
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
 test_network_security_sysctl_generation

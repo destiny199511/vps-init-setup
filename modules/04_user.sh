@@ -256,29 +256,26 @@ user_main() {
         audit "SUDO_CONFIGURED" "username=$username nopasswd=$sudo_nopasswd"
     fi
     
-    # Password authentication requires an actual password, even when public-key
-    # authentication is enabled as a second login method.
+    # Set or update user password if provided, or verify existing password if password auth is enabled
     local user_password="${USER_PASSWORD:-}"
-    if [ "$password_authentication" = "yes" ]; then
-        if [ -z "$user_password" ]; then
-            if passwd -S "$username" 2>/dev/null | awk '$2 ~ /^P/ {found=1} END {exit !found}'; then
-                log_info "Password authentication enabled; preserving existing password for $username"
-            else
-                log_error "Password authentication is enabled, but no user password was provided"
-                return 1
-            fi
+    if [ -n "$user_password" ]; then
+        log_info "Setting password for user: $username"
+        if printf '%s:%s\n' "$username" "$user_password" | chpasswd 2>/dev/null; then
+            log_info "Password set successfully"
+            changes_made=true
+            audit "USER_PASSWORD_SET" "username=$username"
+            unset user_password USER_PASSWORD
         else
-            log_info "Setting password for user: $username"
-            if printf '%s:%s\n' "$username" "$user_password" | chpasswd 2>/dev/null; then
-                log_info "Password set successfully"
-                changes_made=true
-                audit "USER_PASSWORD_SET" "username=$username"
-                unset user_password USER_PASSWORD
-            else
-                log_error "Failed to set password for user: $username"
-                unset user_password USER_PASSWORD
-                return 1
-            fi
+            log_error "Failed to set password for user: $username"
+            unset user_password USER_PASSWORD
+            return 1
+        fi
+    elif [ "$password_authentication" = "yes" ]; then
+        if passwd -S "$username" 2>/dev/null | awk '$2 ~ /^P/ {found=1} END {exit !found}'; then
+            log_info "Password authentication enabled; preserving existing password for $username"
+        else
+            log_error "Password authentication is enabled, but no user password was provided"
+            return 1
         fi
     fi
     unset user_password USER_PASSWORD

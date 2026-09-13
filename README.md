@@ -130,6 +130,7 @@ tail -f logs/vps_setup_*.log
 --status                显示模块执行状态
 --health                查看最近一次配置体检报告
 --view, --show-config   查看常用系统配置 (可选: all, user, ssh, firewall, docker, backup, monitoring, optimization)
+--set-password [user]   设置或修改指定用户的系统与 Sudo 密码 (别名: --passwd)
 ```
 
 完整参数说明请运行：

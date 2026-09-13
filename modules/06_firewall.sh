@@ -19,6 +19,47 @@ firewall_main() {
     firewall_type=$(detect_firewall)
     log_info "Detected firewall system: $firewall_type"
 
+    # If no active or installed firewall was detected, choose and install a sensible default:
+    # - Debian / Ubuntu: ufw
+    # - RHEL / CentOS / Rocky / AlmaLinux / Fedora: firewalld
+    # - Others: iptables
+    if [ "$firewall_type" = "none" ]; then
+        local os_family
+        os_family=$(detect_os_id)
+        case "$os_family" in
+            debian|ubuntu)
+                log_info "No active firewall detected. Selected UFW for Debian/Ubuntu system."
+                if install_package ufw; then
+                    firewall_type="ufw"
+                else
+                    log_warn "Failed to install UFW, falling back to iptables"
+                    firewall_type="iptables"
+                fi
+                ;;
+            rhel|centos|rocky|almalinux|fedora)
+                log_info "No active firewall detected. Selected FirewallD for RHEL-family system."
+                if install_package firewalld; then
+                    firewall_type="firewalld"
+                else
+                    log_warn "Failed to install firewalld, falling back to iptables"
+                    firewall_type="iptables"
+                fi
+                ;;
+            *)
+                if command -v ufw >/dev/null 2>&1; then
+                    firewall_type="ufw"
+                elif command -v firewall-cmd >/dev/null 2>&1; then
+                    firewall_type="firewalld"
+                elif command -v nft >/dev/null 2>&1; then
+                    firewall_type="nftables"
+                else
+                    firewall_type="iptables"
+                fi
+                log_info "No active firewall detected. Selected $firewall_type for host."
+                ;;
+        esac
+    fi
+
     # Backup current firewall state if possible
     case "$firewall_type" in
         ufw)
@@ -187,7 +228,10 @@ firewall_main() {
             # Ensure UFW is installed
             if ! command -v ufw >/dev/null 2>&1; then
                 log_info "Installing UFW..."
-                install_package ufw
+                if ! install_package ufw; then
+                    log_error "Failed to install UFW package"
+                    return 1
+                fi
             fi
             
             # Set default policies

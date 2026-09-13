@@ -221,6 +221,13 @@ detect_firewall() {
         printf '%s\n' "ufw"
         return 0
     fi
+    # On RHEL/CentOS/Fedora systems where firewalld is available (even if inactive),
+    # treat firewalld as the preferred managed firewall frontend.
+    if command -v firewall-cmd >/dev/null 2>&1 && [ -f /etc/os-release ] && \
+       grep -qiE '^(ID|ID_LIKE)=.*(rhel|centos|fedora|rocky|almalinux)' /etc/os-release 2>/dev/null; then
+        printf '%s\n' "firewalld"
+        return 0
+    fi
     if command -v iptables >/dev/null 2>&1; then
         local iptables_rules
         iptables_rules="$(iptables-save 2>/dev/null | grep -vE 'DOCKER|docker0|br-|CNI-|KUBE-' || true)"
@@ -814,7 +821,11 @@ print_review_card() {
             print_kv "$(t '密码认证 (Password):')" "yes ($(t '未设置新密码'))"
         fi
     else
-        print_kv "$(t '密码认证 (Password):')" "no"
+        if [ -n "${USER_PASSWORD:-}" ]; then
+            print_kv "$(t '密码认证 (Password):')" "no ($(t '已设本地密码'))"
+        else
+            print_kv "$(t '密码认证 (Password):')" "no"
+        fi
     fi
     local pubkey_display
     if [ "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-yes}}" = "yes" ]; then

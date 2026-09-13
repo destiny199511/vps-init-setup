@@ -15,6 +15,7 @@ PASSWORD_AUTH 'Allow password authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTHENTICATION 'Allow public key authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTH 'Whether SSH public key auth was chosen in wizard (yes/no)'
 SSH_PUBKEY 'Optional SSH public key content'
+USER_PASSWORD 'User password for system and login authentication'
 USER_FULLNAME 'Full name for the non-root user'
 USER_SHELL 'Login shell for the non-root user'
 CREATE_HOME 'Whether to create the user home directory (true/false)'
@@ -310,6 +311,7 @@ apply_config_defaults() {
 
     # Set defaults for variables that don't have values yet
     : "${USERNAME:=appadmin}"
+    : "${USER_PASSWORD:=}"
     : "${USER_FULLNAME:=}"
     : "${USER_SHELL:=/bin/bash}"
     : "${CREATE_HOME:=true}"

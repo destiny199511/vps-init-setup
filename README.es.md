@@ -113,6 +113,7 @@ Al final de cada ejecución también se muestra una tarjeta de estado en vivo, q
 --status                Muestra el estado de ejecución de los módulos
 --health                Muestra el informe de salud de configuración más reciente
 --view, --show-config   Inspecciona la configuración común del sistema (secciones: all, user, ssh, firewall, docker, backup, monitoring, optimization)
+--set-password [user]   Configura o modifica la contraseña de usuario para sistema y sudo (alias: --passwd)
 ```
 
 Para la lista completa de opciones, ejecuta:

@@ -13,7 +13,7 @@ set -euo pipefail
 # 尽早检查 root 权限（在日志或文件初始化之前输出友好提示）
 if [ "${EUID:-$(id -u)}" -ne 0 ] && [ "${SKIP_ROOT_CHECK:-false}" != "true" ]; then
     case "${1:-}" in
-        -h|--help|-v|--version|--status|--health|--view|--show-config)
+        -h|--help|-v|--version|--status|--health|--view|--show-config|--set-password|--passwd)
             ;;
         *)
             echo -e "\033[0;31m[ERROR]\033[0m 此脚本必须以 root 权限运行 (This script must be run as root)" >&2
@@ -400,7 +400,6 @@ configure_user() {
                     "使用 SSH 公钥认证"*)
                         ssh_pubkey_auth="yes"
                         password_auth="no"
-                        user_password=""
                         ;;
                     "使用密码认证"*)
                         ssh_pubkey_auth="no"
@@ -415,14 +414,44 @@ configure_user() {
                 ;;
             3)
                 res=0
+                local need_set_pwd=false
                 if [ "$password_auth" = "yes" ]; then
+                    need_set_pwd=true
+                else
+                    local pwd_choice=""
+                    menu_select pwd_choice "用户密码设置" "是否为 ${username} 设置或修改本地/Sudo 密码？" 1 \
+                        "不设置或保持现有密码 (仅通过 SSH 公钥登录)" \
+                        "设置或修改系统密码 (推荐，便于 sudo 提权及应急登录)" || res=$?
+                    [ "$res" -eq 2 ] && { sub_step=2; continue; }
+                    case "$pwd_choice" in
+                        *"设置或修改"*)
+                            need_set_pwd=true
+                            ;;
+                        *)
+                            need_set_pwd=false
+                            user_password=""
+                            ;;
+                    esac
+                fi
+
+                if [ "$need_set_pwd" = true ]; then
                     while true; do
                         res=0
-                        password_box user_password "请输入 ${username} 的 SSH 登录密码" || res=$?
+                        local pwd_prompt="请输入 ${username} 的 SSH 登录密码"
+                        if [ "$password_auth" != "yes" ]; then
+                            pwd_prompt="请输入 ${username} 的系统登录与 Sudo 密码"
+                        fi
+                        password_box user_password "$pwd_prompt" || res=$?
                         [ "$res" -eq 2 ] && { sub_step=2; continue 2; }
                         if [ -z "$user_password" ]; then
-                            echo -e "${RED}密码不能为空；选择密码认证时必须设置登录密码。${NC}"
-                            continue
+                            if [ "$password_auth" = "yes" ]; then
+                                echo -e "${RED}密码不能为空；选择密码认证时必须设置登录密码。${NC}"
+                                continue
+                            else
+                                echo -e "${YELLOW}已跳过密码设置，保持现有密码或无密码。${NC}"
+                                user_password=""
+                                break
+                            fi
                         fi
                         res=0
                         password_box password_confirmation "请再次输入密码确认" || res=$?
@@ -433,8 +462,6 @@ configure_user() {
                         fi
                         break
                     done
-                else
-                    user_password=""
                 fi
 
                 if [ "$ssh_pubkey_auth" = "yes" ]; then
@@ -564,6 +591,99 @@ configure_user() {
     export SSH_PUBKEY_AUTH="$ssh_pubkey_auth"
     export USER_PASSWORD="$user_password"
 
+    return 0
+}
+
+# 独立设置或修改用户系统密码
+set_or_change_user_password() {
+    local target_user="${1:-${USERNAME:-appadmin}}"
+    local new_password=""
+    local confirm_password=""
+    local res=0
+
+    print_section "设置 / 修改用户密码"
+    echo -e "${DIM}为指定管理账户设定或更新登录与 Sudo 凭据 (输入 b 可返回)${NC}"
+
+    # 在交互模式下且未显式指定命令行参数时，允许用户确认或输入目标用户名
+    if [ "${NON_INTERACTIVE:-false}" != "true" ] && [ "${AUTO_YES:-false}" != "true" ] && [ $# -eq 0 ]; then
+        input_box target_user "请输入需要设置或修改密码的用户名:" "$target_user" || res=$?
+        if [ "$res" -eq 2 ]; then
+            echo -e "\n${YELLOW}<< 已取消密码修改，返回上一级。${NC}"
+            return 2
+        fi
+    fi
+
+    if ! validate_username "$target_user"; then
+        log_error "无效的用户名: $target_user"
+        return 1
+    fi
+
+    # 检查当前是否为 root
+    if [ "${EUID:-$(id -u)}" -ne 0 ] && [ "${SKIP_ROOT_CHECK:-false}" != "true" ]; then
+        log_error "设置系统密码需要 root 权限，请使用 sudo 运行本脚本"
+        return 1
+    fi
+
+    local user_exists=false
+    if id "$target_user" >/dev/null 2>&1; then
+        user_exists=true
+        log_info "目标用户 '$target_user' 已存在于系统中"
+    else
+        log_info "目标用户 '$target_user' 尚未在系统中创建（密码将暂存至配置并在装机时生效）"
+    fi
+
+    if [ "${NON_INTERACTIVE:-false}" = "true" ] || [ "${AUTO_YES:-false}" = "true" ]; then
+        new_password="${USER_PASSWORD:-}"
+        if [ -z "$new_password" ]; then
+            log_error "非交互模式下请通过 USER_PASSWORD 或 VPS_SETUP_USER_PASSWORD 提供新密码"
+            return 1
+        fi
+    else
+        while true; do
+            res=0
+            password_box new_password "请输入用户 ${target_user} 的新密码" || res=$?
+            if [ "$res" -eq 2 ]; then
+                echo -e "\n${YELLOW}<< 已取消密码修改。${NC}"
+                return 2
+            fi
+            if [ -z "$new_password" ]; then
+                echo -e "${RED}密码不能为空，请重新输入。${NC}"
+                continue
+            fi
+            res=0
+            password_box confirm_password "请再次输入密码确认" || res=$?
+            if [ "$res" -eq 2 ]; then
+                echo -e "\n${YELLOW}<< 已取消密码修改。${NC}"
+                return 2
+            fi
+            if [ "$new_password" != "$confirm_password" ]; then
+                echo -e "${RED}两次输入的密码不一致，请重试。${NC}"
+                continue
+            fi
+            break
+        done
+    fi
+
+    if [ "$user_exists" = true ]; then
+        log_info "正在为用户 '$target_user' 更新系统密码..."
+        if printf '%s:%s\n' "$target_user" "$new_password" | chpasswd 2>/dev/null; then
+            log_ok "用户 '$target_user' 的系统密码已成功设置！"
+            audit "USER_PASSWORD_SET" "username=$target_user"
+        else
+            log_error "更新用户 '$target_user' 密码失败"
+            return 1
+        fi
+    fi
+
+    export USER_PASSWORD="$new_password"
+    export USERNAME="$target_user"
+    # shellcheck disable=SC2046
+    save_config "$CONFIG_FILE" $(get_config_var_names)
+
+    echo -e "\n${GREEN}✔ 用户 ${target_user} 的密码已成功设定并同步保存！${NC}"
+    if [ "${NON_INTERACTIVE:-false}" != "true" ] && [ "${AUTO_YES:-false}" != "true" ] && tui_is_supported; then
+        read -rp "按任意键返回..." -n1
+    fi
     return 0
 }
 
@@ -1155,6 +1275,7 @@ show_main_menu() {
                 "查看模块状态 (Check Module Status)    [查询完成清单]"
                 "配置健康体检与偏差核验 (Health Audit & Validation) [核对期望与实机偏差]"
                 "常用系统配置深度检视 (Inspect System Config)     [查看用户/SSH/防火墙/Docker等细节]"
+                "设置 / 修改用户密码 (Set / Change User Password) [快速修改管理用户密码]"
                 "退出装机向导 (Exit Setup Wizard)      [退出程序]"
             )
             local item_choice=""
@@ -1169,6 +1290,7 @@ show_main_menu() {
                 *"加载"*|*"Manage Config"*) choice="4" ;;
                 *"健康体检"*|*"偏差核验"*|*"Health Audit"*|*"Validation"*) choice="7" ;;
                 *"深度检视"*|*"Inspect System"*|*"常用系统配置"*) choice="8" ;;
+                *"设置"*|*"修改用户密码"*|*"Set / Change User Password"*) choice="9" ;;
                 *"查看模块"*|*"Module Status"*) choice="6" ;;
                 *"开始"*|*"Installation"*) choice="5" ;;
                 *"退出"*|*"Exit"*) choice="0" ;;
@@ -1185,10 +1307,11 @@ show_main_menu() {
             echo -e "  \033[1;36m│\033[0m   6) 查看模块执行状态 (Check Module Status)"
             echo -e "  \033[1;36m│\033[0m   7) 配置健康体检与偏差核验 (Health Audit & Validation)"
             echo -e "  \033[1;36m│\033[0m   8) 常用系统配置深度检视 (Inspect System Configuration)"
+            echo -e "  \033[1;36m│\033[0m   9) 设置 / 修改用户密码 (Set / Change User Password)"
             echo -e "  \033[1;36m│\033[0m   0) 退出程序 (Exit)"
             echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
-            read -r -p "  请选择 [0-8] (默认: 1): " choice
+            read -r -p "  请选择 [0-9] (默认: 1): " choice
             choice="${choice:-1}"
         fi
 
@@ -1242,12 +1365,15 @@ show_main_menu() {
             8)
                 view_config_menu
                 ;;
+            9)
+                set_or_change_user_password
+                ;;
             0|q|exit)
                 log_info "用户退出系统。"
                 exit 0
                 ;;
             *)
-                echo -e "${RED}请输入有效的数字选项 [0-8]${NC}"
+                echo -e "${RED}请输入有效的数字选项 [0-9]${NC}"
                 ;;
         esac
     done
@@ -1390,6 +1516,7 @@ while [[ $# -gt 0 ]]; do
   --health                对系统当前配置进行健康体检并输出基线偏差报告
   --view [section]        深度检视系统各子系统配置细节 (可选: all, user, ssh, firewall, docker, backup, monitoring, optimization)
   --show-config [section] 同 --view
+  --set-password [user]   设置或修改指定用户的系统与 Sudo 密码 (别名: --passwd)
 
 示例:
   sudo $0                 # 交互式向导
@@ -1400,6 +1527,8 @@ while [[ $# -gt 0 ]]; do
   sudo $0 --view          # 深度检视全部系统配置
   sudo $0 --view ssh      # 仅检视 SSH 安全配置
   sudo $0 --view docker   # 仅检视 Docker 容器环境配置
+  sudo $0 --set-password          # 设置或修改管理用户密码
+  sudo $0 --set-password appadmin # 设置或修改指定用户密码
 EOF
             exit 0
             ;;
@@ -1453,6 +1582,16 @@ EOF
                 shift
             fi
             ;;
+        --set-password|--passwd)
+            ACTION="set_password"
+            if [ -n "${2:-}" ] && [[ ! "$2" =~ ^- ]]; then
+                TARGET_PASSWD_USER="$2"
+                shift 2
+            else
+                TARGET_PASSWD_USER="${USERNAME:-appadmin}"
+                shift
+            fi
+            ;;
         *)
             echo "未知选项: $1"
             echo "使用 -h 查看帮助"
@@ -1472,6 +1611,8 @@ elif [ "$ACTION" = "health" ]; then
     MODE_LABEL="配置体检报告"
 elif [ "$ACTION" = "view_config" ]; then
     MODE_LABEL="系统配置查看"
+elif [ "$ACTION" = "set_password" ]; then
+    MODE_LABEL="用户密码设置"
 elif [ "$ACTION" = "rollback" ]; then
     MODE_LABEL="回滚"
 elif [ "$DRY_RUN" = true ] && [ "$NON_INTERACTIVE" = true ]; then
@@ -1531,6 +1672,10 @@ case "$ACTION" in
     view_config)
         view_config_by_name "${VIEW_SECTION:-all}"
         exit 0
+        ;;
+    set_password)
+        set_or_change_user_password "${TARGET_PASSWD_USER:-${USERNAME:-appadmin}}"
+        exit $?
         ;;
     rollback)
         log_info "开始回滚操作..."

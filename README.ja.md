@@ -113,6 +113,7 @@ tail -f logs/vps_setup_*.log
 --status                モジュールの実行状態を表示
 --health                最新の設定ヘルスレポートを表示
 --view, --show-config   常用システム設定を確認 (all, user, ssh, firewall, docker, backup, monitoring, optimization)
+--set-password [user]   ユーザーのシステムおよび sudo パスワードを設定 / 変更 (別名: --passwd)
 ```
 
 すべてのオプションについては、以下を実行してください：

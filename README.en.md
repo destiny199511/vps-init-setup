@@ -130,6 +130,7 @@ At the end of each run a live status card is also shown, including hostname, tim
 --status                Show module execution status
 --health                Show the latest configuration health report
 --view, --show-config   Inspect common system configuration (sections: all, user, ssh, firewall, docker, backup, monitoring, optimization)
+--set-password [user]   Set or change user password for system & sudo (alias: --passwd)
 ```
 
 For the full option list, run:
