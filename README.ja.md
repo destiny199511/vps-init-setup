@@ -112,6 +112,7 @@ tail -f logs/vps_setup_*.log
 --modules <list>        指定したモジュールのみ実行。例：01_hostname,05_ssh
 --status                モジュールの実行状態を表示
 --health                最新の設定ヘルスレポートを表示
+--view, --show-config   常用システム設定を確認 (all, user, ssh, firewall, docker, backup, monitoring, optimization)
 ```
 
 すべてのオプションについては、以下を実行してください：
@@ -127,6 +128,12 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
   | sudo bash -s -- --ref main --update-only
 ```
 
+`install.sh` の主なオプション：
+- `--ref <tag|branch>`：対象のリリースタグまたはブランチを指定。
+- `--sha256 <hash>`：アーカイブの期待される SHA-256 ハッシュ（本番環境推奨）。
+- `--insecure-skip-verify`：チェックサムファイルが存在しない場合に検証をスキップ。
+- `--update-only`：設定ウィザードを起動せずにスクリプトファイルを更新。
+
 更新時には `config/`、`logs/`、`backups/` が保持されます。主要なファイル：
 
 - 設定：`config/vps_config.conf`
@@ -136,6 +143,15 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
 - 自動バックアップと設定スナップショット：`backups/`
 
 > `--rollback` はまだ完全には実装されていません。復元が必要な場合は `backups/` 内のスナップショットを使用してください。
+
+## トラブルシューティングと検証
+
+- **リリース検証**: インストーラーは GitHub Releases からパッケージと `.sha256` ファイルを自動的に取得して整合性を検証します。チェックサムファイルがないソースアーカイブの場合も、処理を中断せずに継続します。
+- **SHA-256 による特定バージョンの固定**:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+    | sudo bash -s -- --ref v1.0.0 --sha256 8c27f45de8930035081a09f8753cb8488df1ceb638c2d3b04ee8424a7cfae952
+  ```
 
 ## 互換性
 

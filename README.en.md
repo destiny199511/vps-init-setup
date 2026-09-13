@@ -161,6 +161,22 @@ Updates preserve `config/`, `logs/`, and `backups/`. Key files:
 
 > `--rollback` is not fully implemented yet; to restore, use the snapshots in `backups/`.
 
+## Troubleshooting & Verification
+
+- **Release Verification & Tamper Prevention**:
+  The installer automatically downloads the pre-packaged archive from GitHub Releases along with its companion `.sha256` checksum file to ensure integrity. If running in restricted networks or using a custom tag without binary assets, it gracefully falls back without blocking installation.
+- **Pinned Release with SHA-256 (Production Recommended)**:
+  For hardened environments requiring strict immutable pinning:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+    | sudo bash -s -- --ref v1.0.0 --sha256 8c27f45de8930035081a09f8753cb8488df1ceb638c2d3b04ee8424a7cfae952
+  ```
+- **Install Directly from Main Branch**:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+    | sudo bash -s -- --ref main
+  ```
+
 ## Compatibility
 
 Primarily targets common VPS distributions such as Ubuntu, Debian, CentOS Stream, Rocky Linux, and AlmaLinux. Fresh machines may have background updates holding the APT lock; the script waits automatically, up to 300 seconds by default. Adjust with `APT_LOCK_WAIT=600`.

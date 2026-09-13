@@ -112,6 +112,7 @@ Al final de cada ejecución también se muestra una tarjeta de estado en vivo, q
 --modules <list>        Ejecuta solo los módulos especificados, p. ej. 01_hostname,05_ssh
 --status                Muestra el estado de ejecución de los módulos
 --health                Muestra el informe de salud de configuración más reciente
+--view, --show-config   Inspecciona la configuración común del sistema (secciones: all, user, ssh, firewall, docker, backup, monitoring, optimization)
 ```
 
 Para la lista completa de opciones, ejecuta:
@@ -127,6 +128,12 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
   | sudo bash -s -- --ref main --update-only
 ```
 
+Parámetros comunes de `install.sh`:
+- `--ref <tag|rama>`: Especifica la etiqueta o rama de versión de destino.
+- `--sha256 <hash>`: Hash SHA-256 esperado del archivo (recomendado para entornos de producción).
+- `--insecure-skip-verify`: Omite la verificación si no hay archivo de comprobación en el repositorio.
+- `--update-only`: Actualiza los archivos sin iniciar el asistente de configuración.
+
 Las actualizaciones conservan `config/`, `logs/` y `backups/`. Archivos clave:
 
 - Configuración: `config/vps_config.conf`
@@ -136,6 +143,15 @@ Las actualizaciones conservan `config/`, `logs/` y `backups/`. Archivos clave:
 - Copias de seguridad automáticas e instantáneas de configuración: `backups/`
 
 > `--rollback` aún no está completamente implementado; para restaurar, usa las instantáneas en `backups/`.
+
+## Solución de Problemas y Verificación
+
+- **Verificación de Release**: El instalador descarga automáticamente el paquete de GitHub Releases junto con su archivo `.sha256`. Si se instala desde una etiqueta de código fuente sin archivos de suma de comprobación, continúa sin bloquear la instalación.
+- **Versión Fijada con SHA-256**:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+    | sudo bash -s -- --ref v1.0.0 --sha256 8c27f45de8930035081a09f8753cb8488df1ceb638c2d3b04ee8424a7cfae952
+  ```
 
 ## Compatibilidad
 

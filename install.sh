@@ -212,14 +212,20 @@ validate_release_tree() {
 resolve_release_tag() {
     local repo="$1"
     local requested_ref="$2"
-    local api_url
+    local tag_name=""
 
     if [ "$requested_ref" = "latest" ] || [ -z "$requested_ref" ]; then
-        api_url="https://api.github.com/repos/${repo}/releases/latest"
-        local release_json
-        release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
-        local tag_name
-        tag_name="$(printf '%s\n' "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"tag_name": *"//; s/"$//' | head -n 1)"
+        # 1. 优先通过 GitHub releases/latest 302 重定向解析，不消耗 GitHub API 速率配额
+        tag_name="$(curl -sI "https://github.com/${repo}/releases/latest" 2>/dev/null | grep -i '^location:' | sed -n 's/.*tag\/\([^[:space:]\r\n]*\).*/\1/p' | head -n 1)"
+
+        # 2. 如果重定向解析失败，尝试通过 GitHub REST API 获取
+        if [ -z "$tag_name" ]; then
+            local api_url="https://api.github.com/repos/${repo}/releases/latest"
+            local release_json
+            release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
+            tag_name="$(printf '%s\n' "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"tag_name": *"//; s/"$//' | head -n 1)"
+        fi
+
         if [ -n "$tag_name" ]; then
             printf '%s\n' "$tag_name"
         else
@@ -233,17 +239,21 @@ resolve_release_tag() {
 resolve_download_url() {
     local repo="$1"
     local release_tag="$2"
-    local api_url
-    local release_json
-    local asset_url
+    local api_url release_json asset_url direct_asset
 
     if [ "$release_tag" = "latest" ] || [ -z "$release_tag" ]; then
-        api_url="https://api.github.com/repos/${repo}/releases/latest"
-        release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
-        release_tag="$(printf '%s\n' "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"tag_name": *"//; s/"$//' | head -n 1)"
+        release_tag="$(resolve_release_tag "$repo" "$release_tag")"
     fi
 
     if [ -n "$release_tag" ] && [ "$release_tag" != "main" ] && [ "$release_tag" != "master" ]; then
+        # 1. 优先直接探测标准的 Release 资产 URL（不依赖 API，速度快且无速率限制）
+        direct_asset="https://github.com/${repo}/releases/download/${release_tag}/vps-init-setup-${release_tag}.tar.gz"
+        if curl -fsSLI "$direct_asset" >/dev/null 2>&1; then
+            printf '%s\n' "$direct_asset"
+            return 0
+        fi
+
+        # 2. 尝试从 GitHub Release API 查找匹配的发布资产
         api_url="https://api.github.com/repos/${repo}/releases/tags/${release_tag}"
         release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
         asset_url="$(printf '%s\n' "$release_json" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"browser_download_url": *"//; s/"$//' | grep -E 'vps-init-setup.*(\.tar\.gz|\.tgz)$' | head -n 1 || true)"
@@ -253,6 +263,7 @@ resolve_download_url() {
         fi
     fi
 
+    # 3. 回退到 GitHub 自动源码归档
     if [ "$release_tag" = "main" ] || [ "$release_tag" = "master" ] || [ -z "$release_tag" ]; then
         printf 'https://github.com/%s/archive/refs/heads/%s.tar.gz\n' "$repo" "$release_tag"
     else
@@ -279,6 +290,22 @@ verify_release_checksum() {
     case "$archive_url" in
         */archive/refs/heads/*)
             echo "Warning: installing an unpinned development branch archive. Use a release tag and --sha256 for production."
+            return 0
+            ;;
+        */archive/refs/tags/*)
+            checksum_url="${archive_url}.sha256"
+            checksum_file="${archive_file}.sha256"
+            if curl -fsSL "$checksum_url" -o "$checksum_file" 2>/dev/null; then
+                expected_checksum="$(awk 'NF {print $1; exit}' "$checksum_file")"
+                actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
+                if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
+                    echo "Release checksum verification failed."
+                    exit 1
+                fi
+                echo "Release checksum verified."
+            else
+                echo "Note: upstream tag archive does not provide an independent .sha256 file; proceeding."
+            fi
             return 0
             ;;
     esac

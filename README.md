@@ -161,6 +161,22 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
 
 > `--rollback` 当前尚未完整实现；需要恢复时，请使用 `backups/` 中的快照。
 
+## 常见问题与安装排查
+
+- **Release 校验与安全防篡改**：
+  安装器默认通过 GitHub Releases 预编译包安装，并自动下载配套的 `.sha256` 校验和文件进行完整性验证。如遇网络限制或使用无预编译包的自定义 tag 时，安装器会自动平滑回退，避免中断流程。
+- **固化版本与离线校验（生产推荐）**：
+  若生产环境需要严格固定版本并防止任何中间人篡改，可通过 `--sha256` 显式传入目标哈希：
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+    | sudo bash -s -- --ref v1.0.0 --sha256 8c27f45de8930035081a09f8753cb8488df1ceb638c2d3b04ee8424a7cfae952
+  ```
+- **直接使用主分支最新代码**：
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
+    | sudo bash -s -- --ref main
+  ```
+
 ## 兼容性
 
 主要面向 Ubuntu、Debian、CentOS Stream、Rocky Linux 和 AlmaLinux 等常见 VPS 发行版。新机器可能会有后台更新占用 APT 锁，脚本会自动等待，默认最长 300 秒；可用 `APT_LOCK_WAIT=600` 调整。
