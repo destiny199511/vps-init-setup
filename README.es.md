@@ -125,11 +125,11 @@ sudo ./vps_setup.sh --help
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --ref main --update-only
+  | sudo bash -s -- --update-only
 ```
 
 Parámetros comunes de `install.sh`:
-- `--ref <tag|rama>`: Especifica la etiqueta o rama de versión de destino.
+- `--ref <tag|rama>`: Especifica la etiqueta o rama de versión de destino (por defecto el código más reciente de la rama `main`; o una etiqueta como `v2.0.0`).
 - `--sha256 <hash>`: Hash SHA-256 esperado del archivo (recomendado para entornos de producción).
 - `--insecure-skip-verify`: Omite la verificación si no hay archivo de comprobación en el repositorio.
 - `--update-only`: Actualiza los archivos sin iniciar el asistente de configuración.
@@ -146,11 +146,16 @@ Las actualizaciones conservan `config/`, `logs/` y `backups/`. Archivos clave:
 
 ## Solución de Problemas y Verificación
 
+- **Instalación Directa con el Código Más Reciente**:
+  Ejecutar el comando predeterminado del README instala directamente el código más reciente de la rama `main`:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+  ```
 - **Verificación de Release**: El instalador descarga automáticamente el paquete de GitHub Releases junto con su archivo `.sha256`. Si se instala desde una etiqueta de código fuente sin archivos de suma de comprobación, continúa sin bloquear la instalación.
 - **Versión Fijada con SHA-256**:
   ```bash
   curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-    | sudo bash -s -- --ref v1.0.0 --sha256 8c27f45de8930035081a09f8753cb8488df1ceb638c2d3b04ee8424a7cfae952
+    | sudo bash -s -- --ref v2.0.0 --sha256 <hash>
   ```
 
 ## Compatibilidad

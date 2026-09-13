@@ -33,7 +33,7 @@ else
 fi
 REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
 INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
-REF="${VPS_INIT_SETUP_REF:-$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || echo "latest")}"
+REF="${VPS_INIT_SETUP_REF:-main}"
 EXPECTED_SHA256="${VPS_INIT_SETUP_SHA256:-}"
 INSECURE_SKIP_VERIFY="${VPS_INIT_SETUP_INSECURE_SKIP_VERIFY:-false}"
 RUN_SETUP=true

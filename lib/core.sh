@@ -137,7 +137,7 @@ detect_os() {
     fi
     OS_PRETTY="${OS_PRETTY:-${OS_NAME} ${OS_VERSION_ID}}"
     ARCH="$(uname -m)"
-    log_info "$(t '系统检测: ${OS_PRETTY} | ${ARCH}')"
+    log_info "$(t '系统检测:') ${OS_PRETTY} | ${ARCH}"
 }
 
 # detect_os_id: 返回标准化 OS ID，供命令替换使用，避免捕获日志文本
@@ -175,7 +175,7 @@ detect_pkg_manager() {
     else
         die "$(t '不支持的包管理器')"
     fi
-    log_info "$(t '包管理器: ${PKG_MGR}')"
+    log_info "$(t '包管理器:') ${PKG_MGR}"
 }
 
 detect_service_manager() {
@@ -188,7 +188,7 @@ detect_service_manager() {
     else
         SVC_MGR="auto"
     fi
-    log_info "$(t '服务管理器: ${SVC_MGR}')"
+    log_info "$(t '服务管理器:') ${SVC_MGR}"
 }
 
 detect_firewall() {
@@ -1133,10 +1133,12 @@ print_health_report() {
         if [ "${INSTALL_FAIL2BAN:-false}" = "true" ] && health_should_check_module "07_fail2ban"; then
             [ "$ACTUAL_FAIL2BAN" = "active" ] && health_item pass "Fail2ban" "active" "$ACTUAL_FAIL2BAN" || { health_item fail "Fail2ban" "active" "$ACTUAL_FAIL2BAN"; add_fix_module "07_fail2ban"; }
         fi
-        if [ "${FAILED_COUNT:-0}" -eq 0 ]; then
-            health_item pass "$(t '模块执行')" "$(t '无失败模块')" "$(t '失败 ${FAILED_COUNT:-0}')"
+        local failed_cnt="${FAILED_COUNT:-0}"
+        if [ "$failed_cnt" -eq 0 ]; then
+            health_item pass "$(t '模块执行')" "$(t '无失败模块')" "$(t '全部正常')"
         else
-            health_item fail "$(t '模块执行')" "$(t '无失败模块')" "$(t '失败 ${FAILED_COUNT:-0}')"
+            health_item fail "$(t '模块执行')" "$(t '无失败模块')" "$(t '存在失败模块:') ${failed_cnt}"
+            add_fix_module "failed"
         fi
     fi
 
@@ -1163,19 +1165,22 @@ print_health_report() {
 }
 
 show_latest_health_report() {
-    local report_file
-    report_file="$(find "${LOGS_DIR}" -maxdepth 1 -type f -name 'health_report_*.txt' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)"
-    if [ -z "$report_file" ] || [ ! -f "$report_file" ]; then
-        msg_box "$(t '配置体检报告')" "$(t '尚未生成体检报告。请先完成一次非试运行安装。')"
-        return 1
+    print_actual_vps_status false
+    echo ""
+    log_info "$(t '正在执行系统实际配置与健康状态实时核验...')"
+    HEALTH_CHECK_ALL=true print_health_report false || true
+    echo ""
+    if declare -F view_config_all >/dev/null 2>&1; then
+        view_config_all
     fi
-    print_section "$(t '最近配置体检报告')"
-    sed 's/^/  │  /' "$report_file"
-    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
+    return 0
 }
 
 health_should_check_module() {
     local module_name="$1" module
+    if [ "${HEALTH_CHECK_ALL:-false}" = "true" ]; then
+        return 0
+    fi
     for module in "${MODULES_TO_RUN[@]:-}"; do
         [ "${module%%:*}" = "$module_name" ] && return 0
     done
@@ -1215,8 +1220,8 @@ init_system() {
     detect_pkg_manager
     detect_service_manager
     CONFIG_LOADED=true
-    log_info "$(t 'VPS一键装机 v${VPS_TOOL_VERSION} 已初始化')"
-    log_info "$(t '系统: ${OS_PRETTY} | 包管理: ${PKG_MGR} | 服务管理: ${SVC_MGR}')"
+    log_info "$(t 'VPS一键装机') v${VPS_TOOL_VERSION} $(t '已初始化')"
+    log_info "$(t '系统:') ${OS_PRETTY} | $(t '包管理:') ${PKG_MGR} | $(t '服务管理:') ${SVC_MGR}"
 }
 
 # print_startup_banner: 启动页
@@ -1225,7 +1230,7 @@ print_startup_banner() {
     local mode_label="$(t "$raw_label")"
     echo ""
     echo -e "  \033[1;36m╭──────────────────────────────────────────────────────────╮\033[0m"
-    echo -e "$(t '  \033[1;36m│\033[0m  \033[1;37m❖ VPS 一键装机 v${VPS_TOOL_VERSION}\033[0m')"
+    echo -e "  \033[1;36m│\033[0m  \033[1;37m❖ $(t 'VPS 一键装机') v${VPS_TOOL_VERSION}\033[0m"
     echo -e "  \033[1;36m├──────────────────────────────────────────────────────────┤\033[0m"
     printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "$(t '系统环境:')" "${OS_PRETTY:-unknown} (${ARCH:-$(uname -m)})"
     printf "  \033[1;36m│\033[0m  \033[1;36m%-10s\033[0m %s\n" "$(t '包管理器:')" "${PKG_MGR:-unknown}"

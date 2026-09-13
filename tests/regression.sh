@@ -70,6 +70,13 @@ test_unsafe_install_dir_guard() {
         fail "unsafe install directory rejection"
 }
 
+test_install_default_ref() {
+    local help_out
+    help_out=$(bash "$ROOT_DIR/install.sh" --help)
+    echo "$help_out" | grep -Fq '(default: main)' || \
+        fail "install.sh should default to main branch"
+}
+
 test_tui_engine_load() {
     (
         cd "$ROOT_DIR"
@@ -287,4 +294,5 @@ test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
 test_network_security_sysctl_generation
 test_unsafe_install_dir_guard
+test_install_default_ref
 printf 'Regression checks passed.\n'

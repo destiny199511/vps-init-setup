@@ -142,11 +142,11 @@ sudo ./vps_setup.sh --help
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --ref main --update-only
+  | sudo bash -s -- --update-only
 ```
 
 `install.sh` 支持的常用参数：
-- `--ref <tag|branch>`：指定安装版本或分支（默认最新 Release 或 `VERSION` 中版本）。
+- `--ref <tag|branch>`：指定安装版本或分支（默认 `main` 主分支最新代码；也可指定特定 Release Tag 如 `v2.0.0`）。
 - `--sha256 <hash>`：指定期望的归档包 SHA-256 校验和（生产加固推荐）。
 - `--insecure-skip-verify`：当 Release 校验和文件不存在或无法下载时跳过校验。
 - `--update-only`：仅同步更新脚本与模块文件，不自动启动配置向导。
@@ -163,18 +163,18 @@ curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/i
 
 ## 常见问题与安装排查
 
+- **直接一键安装最新代码**：
+  直接执行 README 顶部的默认一键命令即可拉取 `main` 主分支的最新代码：
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+  ```
 - **Release 校验与安全防篡改**：
-  安装器默认通过 GitHub Releases 预编译包安装，并自动下载配套的 `.sha256` 校验和文件进行完整性验证。如遇网络限制或使用无预编译包的自定义 tag 时，安装器会自动平滑回退，避免中断流程。
+  若指定 Release Tag 安装，安装器会自动下载配套的 `.sha256` 校验和文件进行完整性验证。如遇网络限制或使用无预编译包的自定义 tag 时，安装器会自动平滑回退，避免中断流程。
 - **固化版本与离线校验（生产推荐）**：
   若生产环境需要严格固定版本并防止任何中间人篡改，可通过 `--sha256` 显式传入目标哈希：
   ```bash
   curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-    | sudo bash -s -- --ref v1.0.0 --sha256 8c27f45de8930035081a09f8753cb8488df1ceb638c2d3b04ee8424a7cfae952
-  ```
-- **直接使用主分支最新代码**：
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-    | sudo bash -s -- --ref main
+    | sudo bash -s -- --ref v2.0.0 --sha256 <hash>
   ```
 
 ## 兼容性

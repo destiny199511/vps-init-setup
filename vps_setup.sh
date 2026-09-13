@@ -1005,7 +1005,7 @@ show_main_menu() {
                 "加载 / 重置配置 (Manage Config File)  [重置或重新读取]"
                 "开始执行安装 (Start Installation)     [确认并立即执行]"
                 "查看模块状态 (Check Module Status)    [查询完成清单]"
-                "查看配置体检报告 (Health Report)       [核验实际生效状态]"
+                "查看配置体检与实际状态 (Health Report & Live State) [实时核验]"
                 "查看常用系统配置 (Inspect System Config) [用户/SSH/防火墙/Docker/备份/监控/优化]"
                 "退出装机向导 (Exit Setup Wizard)      [退出程序]"
             )
@@ -1015,15 +1015,15 @@ show_main_menu() {
                 exit 0
             fi
             case "$item_choice" in
-                "完整向导"*) choice="1" ;;
-                "模块化"*) choice="2" ;;
-                "预览"*) choice="3" ;;
-                "加载"*) choice="4" ;;
-                "配置体检"*) choice="7" ;;
-                "查看模块"*) choice="6" ;;
-                "查看常用系统配置"*) choice="8" ;;
-                "开始"*) choice="5" ;;
-                "退出"*) choice="0" ;;
+                *"完整向导"*|*"Guided"*) choice="1" ;;
+                *"模块化"*|*"Section"*) choice="2" ;;
+                *"预览"*|*"Review"*) choice="3" ;;
+                *"加载"*|*"Manage Config"*) choice="4" ;;
+                *"配置体检"*|*"Health Report"*|*"实际状态"*) choice="7" ;;
+                *"常用系统配置"*|*"Inspect System"*) choice="8" ;;
+                *"查看模块"*|*"Module Status"*) choice="6" ;;
+                *"开始"*|*"Installation"*) choice="5" ;;
+                *"退出"*|*"Exit"*) choice="0" ;;
                 *) choice="1" ;;
             esac
         else
@@ -1035,7 +1035,7 @@ show_main_menu() {
             echo -e "  \033[1;36m│\033[0m   4) 加载 / 重置配置文件 (Manage Config File)"
             echo -e "  \033[1;36m│\033[0m   5) 开始执行安装 (Start Installation)"
             echo -e "  \033[1;36m│\033[0m   6) 查看模块执行状态 (Check Module Status)"
-            echo -e "  \033[1;36m│\033[0m   7) 查看配置体检报告 (Health Report)"
+            echo -e "  \033[1;36m│\033[0m   7) 查看配置体检与实际状态 (Health Report & Live State)"
             echo -e "  \033[1;36m│\033[0m   8) 查看常用系统配置 (Inspect System Configuration)"
             echo -e "  \033[1;36m│\033[0m   0) 退出程序 (Exit)"
             echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
