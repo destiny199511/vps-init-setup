@@ -338,6 +338,43 @@ test_view_config_cli() {
     echo "$output" | grep -Fq "Docker 容器环境配置" || fail "--view docker failed"
 }
 
+test_ssh_legacy_port_and_pubkey_configuration() {
+    local isolated_repo="$SANDBOX_DIR/ssh-pubkey-guard"
+    cp -a "$ROOT_DIR" "$isolated_repo"
+    local config_file="$isolated_repo/config/vps_config.conf"
+
+    # Test that SSH_KEEP_LEGACY_PORT=false is preserved and parsed properly
+    (
+        cd "$isolated_repo"
+        source lib/core.sh
+        source lib/common.sh
+        printf '%s\n' \
+            'SSH_PORT=24822' \
+            'SSH_KEEP_LEGACY_PORT=false' \
+            'PASSWORD_AUTH=no' \
+            'SSH_PUBKEY_AUTHENTICATION=yes' \
+            'SSH_PUBKEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey user@workstation' > "$config_file"
+        chmod 600 "$config_file"
+        load_config "$config_file"
+        [ "$SSH_PORT" = "24822" ]
+        [ "$SSH_KEEP_LEGACY_PORT" = "false" ]
+        [ "$PASSWORD_AUTH" = "no" ]
+        [ "$SSH_PUBKEY_AUTHENTICATION" = "yes" ]
+        [ "$SSH_PUBKEY" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey user@workstation" ]
+
+        # Test review card output reflects the new port policy and pubkey
+        local card_out
+        card_out=$(print_review_card 13)
+        echo "$card_out" | grep -Fq "彻底关闭旧端口 22" || fail "review card should show closed legacy port"
+        echo "$card_out" | grep -Fq "ssh-ed25519 user@workstation" || fail "review card should show pubkey summary"
+
+        # Test i18n translation for new keys
+        set_ui_language en
+        [ "$(t '保留旧 SSH 端口:')" = "Keep Legacy SSH Port:" ]
+        [ "$(t '旧端口 22 目前仍保持监听。')" = "Legacy port 22 is still listening." ]
+    ) || fail "ssh legacy port and pubkey configuration test failed"
+}
+
 test_safe_config_parser
 test_access_guard
 test_module_source_guard
@@ -354,6 +391,7 @@ test_root_guard
 test_rollback_cli_guard
 test_health_report_cli
 test_view_config_cli
+test_ssh_legacy_port_and_pubkey_configuration
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
 test_network_security_sysctl_generation

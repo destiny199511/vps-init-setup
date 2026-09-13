@@ -795,7 +795,15 @@ print_review_card() {
     print_kv "$(t '语言 (Locale):')" "${LOCALE:-}"
     print_kv "$(t 'DNS 服务器:')" "${PRIMARY_DNS:-} / ${SECONDARY_DNS:-}"
     print_kv "$(t 'SSH 端口 (Port):')" "${SSH_PORT:-}"
-    print_kv "$(t '保留旧 SSH 端口:')" "${SSH_KEEP_LEGACY_PORT:-true}"
+    local keep_legacy_display
+    if [ "${SSH_PORT:-22}" = "22" ]; then
+        keep_legacy_display="$(t '不适用 (端口已为 22)')"
+    elif [ "${SSH_KEEP_LEGACY_PORT:-true}" = "true" ]; then
+        keep_legacy_display="${YELLOW}$(t 'yes (双端口过渡防失联: 同时监听 22 与 ')${SSH_PORT})${NC}"
+    else
+        keep_legacy_display="${GREEN}$(t 'no (彻底关闭旧端口 22，仅监听 ')${SSH_PORT})${NC}"
+    fi
+    print_kv "$(t '保留旧 SSH 端口:')" "$keep_legacy_display"
     print_kv "$(t 'Root 远程登录:')" "${PERMIT_ROOT_LOGIN:-}"
     if [ "${PASSWORD_AUTH:-no}" = "yes" ]; then
         if [ -n "${USER_PASSWORD:-}" ]; then
@@ -806,7 +814,20 @@ print_review_card() {
     else
         print_kv "$(t '密码认证 (Password):')" "no"
     fi
-    print_kv "$(t '公钥认证 (Pubkey):')" "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-}}"
+    local pubkey_display
+    if [ "${SSH_PUBKEY_AUTH:-${SSH_PUBKEY_AUTHENTICATION:-yes}}" = "yes" ]; then
+        if [ -n "${SSH_PUBKEY:-}" ]; then
+            local k_type k_comment
+            k_type=$(echo "$SSH_PUBKEY" | awk '{print $1}')
+            k_comment=$(echo "$SSH_PUBKEY" | awk '{print $NF}')
+            pubkey_display="${GREEN}yes (${k_type} ${k_comment})${NC}"
+        else
+            pubkey_display="${YELLOW}yes ($(t '将从系统继承已有公钥'))${NC}"
+        fi
+    else
+        pubkey_display="${DIM}no${NC}"
+    fi
+    print_kv "$(t '公钥认证 (Pubkey):')" "$pubkey_display"
     print_kv "$(t 'Fail2ban 防爆破:')" "${INSTALL_FAIL2BAN:-}"
     print_kv "$(t 'Docker 容器引擎:')" "${INSTALL_DOCKER:-}"
     print_kv "Node.js & NPM:" "${INSTALL_NPM:-}"
@@ -890,6 +911,15 @@ print_completion_card() {
     print_kv "$(t '主机名 (Host):')" "${HOSTNAME:-}"
     print_kv "$(t '管理用户 (User):')" "${USERNAME:-}"
     print_kv "$(t 'SSH 端口 (Port):')" "${SSH_PORT:-}"
+    local comp_legacy_display
+    if [ "${SSH_PORT:-22}" = "22" ]; then
+        comp_legacy_display="$(t '不适用 (端口已为 22)')"
+    elif [ "${SSH_KEEP_LEGACY_PORT:-true}" = "true" ]; then
+        comp_legacy_display="${YELLOW}$(t 'yes (同时保留 22 端口过渡防失联)')${NC}"
+    else
+        comp_legacy_display="${GREEN}$(t 'no (仅监听新端口 ')${SSH_PORT})${NC}"
+    fi
+    print_kv "$(t '保留旧 SSH 端口:')" "$comp_legacy_display"
     print_kv "$(t 'Root 远程登录:')" "${PERMIT_ROOT_LOGIN:-}"
     print_kv "$(t '密码认证登录:')" "${PASSWORD_AUTH:-}"
     if [[ -n "${server_ip}" ]]; then
@@ -922,6 +952,24 @@ print_completion_card() {
     elif [[ "${dry_run}" != "true" ]]; then
         echo -e "$(t '\n  \033[1;33m⚠ 安全提醒: 请新建终端测试新 SSH 端口登录，确认无误后再断开当前会话。\033[0m')"
     fi
+
+    echo ""
+    echo -e "  \033[1;36m╭─ \033[1;37m$(t '客户端连接与公钥管理指引 / Connection Guide')\033[1;36m ─────────────────────\033[0m"
+    if [ "${PASSWORD_AUTH:-no}" != "yes" ]; then
+        echo -e "  \033[1;36m│\033[0m  • $(t '公钥认证已启用 (已禁用密码登录):')"
+        echo -e "  \033[1;36m│\033[0m    $(t '请确保使用本地私钥连接 (私钥在客户端本地，服务器不存私钥):')"
+        echo -e "  \033[1;36m│\033[0m    \033[1;32mssh -i ~/.ssh/id_ed25519 -p ${SSH_PORT:-22} ${USERNAME:-root}@${server_ip:-SERVER_IP}\033[0m"
+    else
+        echo -e "  \033[1;36m│\033[0m  • $(t '密码认证已启用:')"
+        echo -e "  \033[1;36m│\033[0m    \033[1;32mssh -p ${SSH_PORT:-22} ${USERNAME:-root}@${server_ip:-SERVER_IP}\033[0m"
+        echo -e "  \033[1;36m│\033[0m  • $(t '推荐在本地电脑运行以下命令一键上传公钥:')"
+        echo -e "  \033[1;36m│\033[0m    \033[1;36mssh-copy-id -p ${SSH_PORT:-22} ${USERNAME:-appadmin}@${server_ip:-SERVER_IP}\033[0m"
+    fi
+    if [ "${SSH_KEEP_LEGACY_PORT:-true}" = "true" ] && [ "${SSH_PORT:-22}" != "22" ]; then
+        echo -e "  \033[1;36m│\033[0m  • \033[1;33m$(t '防失联提醒:')\033[0m $(t '旧端口 22 目前仍保持监听。')"
+        echo -e "  \033[1;36m│\033[0m    $(t '验证新端口连通后，可通过重新配置并将保留旧端口设为 no 来彻底关闭 22 端口。')"
+    fi
+    echo -e "  \033[1;36m╰──────────────────────────────────────────────────────────\033[0m"
 
     echo ""
     echo -e "$(t '  \033[1;36m╭─ \033[1;37m常用快捷命令\033[1;36m ──────────────────────────────────────────\033[0m')"
