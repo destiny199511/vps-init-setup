@@ -139,45 +139,6 @@ For the full option list, run:
 sudo ./vps_setup.sh --help
 ```
 
-## Updates and File Locations
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --update-only
-```
-
-Common parameters supported by `install.sh`:
-- `--ref <tag|branch>`: Specify target release tag or branch (defaults to `main` branch latest code; or specify a tag like `v2.0.0`).
-- `--sha256 <hash>`: Expected SHA-256 archive hash (recommended for production verification).
-- `--insecure-skip-verify`: Bypass checksum verification if upstream checksum file is unavailable.
-- `--update-only`: Update script files without launching the setup wizard.
-
-Updates preserve `config/`, `logs/`, and `backups/`. Key files:
-
-- Configuration: `config/vps_config.conf`
-- Execution results: `config/install-result.env`
-- Run logs: `logs/vps_setup_*.log`
-- Security audit logs: `logs/audit_*.log`
-- Automatic backups and config snapshots: `backups/`
-
-> `--rollback` is not fully implemented yet; to restore, use the snapshots in `backups/`.
-
-## Troubleshooting & Verification
-
-- **Direct One-Line Installation with Latest Code**:
-  Running the default command from the README installs the latest code from `main`:
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
-  ```
-- **Release Verification & Tamper Prevention**:
-  When installing a specific release tag, the installer downloads the pre-packaged archive along with its `.sha256` checksum file to ensure integrity. If running in restricted networks or using a custom tag without binary assets, it gracefully falls back without blocking installation.
-- **Pinned Release with SHA-256 (Production Recommended)**:
-  For hardened environments requiring strict immutable pinning:
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-    | sudo bash -s -- --ref v2.0.0 --sha256 <hash>
-  ```
-
 ## Compatibility
 
 Primarily targets common VPS distributions such as Ubuntu, Debian, CentOS Stream, Rocky Linux, and AlmaLinux. Fresh machines may have background updates holding the APT lock; the script waits automatically, up to 300 seconds by default. Adjust with `APT_LOCK_WAIT=600`.

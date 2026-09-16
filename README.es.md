@@ -122,43 +122,6 @@ Para la lista completa de opciones, ejecuta:
 sudo ./vps_setup.sh --help
 ```
 
-## Actualizaciones y Ubicación de Archivos
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --update-only
-```
-
-Parámetros comunes de `install.sh`:
-- `--ref <tag|rama>`: Especifica la etiqueta o rama de versión de destino (por defecto el código más reciente de la rama `main`; o una etiqueta como `v2.0.0`).
-- `--sha256 <hash>`: Hash SHA-256 esperado del archivo (recomendado para entornos de producción).
-- `--insecure-skip-verify`: Omite la verificación si no hay archivo de comprobación en el repositorio.
-- `--update-only`: Actualiza los archivos sin iniciar el asistente de configuración.
-
-Las actualizaciones conservan `config/`, `logs/` y `backups/`. Archivos clave:
-
-- Configuración: `config/vps_config.conf`
-- Resultados de ejecución: `config/install-result.env`
-- Registros de ejecución: `logs/vps_setup_*.log`
-- Registros de auditoría de seguridad: `logs/audit_*.log`
-- Copias de seguridad automáticas e instantáneas de configuración: `backups/`
-
-> `--rollback` aún no está completamente implementado; para restaurar, usa las instantáneas en `backups/`.
-
-## Solución de Problemas y Verificación
-
-- **Instalación Directa con el Código Más Reciente**:
-  Ejecutar el comando predeterminado del README instala directamente el código más reciente de la rama `main`:
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
-  ```
-- **Verificación de Release**: El instalador descarga automáticamente el paquete de GitHub Releases junto con su archivo `.sha256`. Si se instala desde una etiqueta de código fuente sin archivos de suma de comprobación, continúa sin bloquear la instalación.
-- **Versión Fijada con SHA-256**:
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-    | sudo bash -s -- --ref v2.0.0 --sha256 <hash>
-  ```
-
 ## Compatibilidad
 
 Dirigido principalmente a distribuciones VPS comunes como Ubuntu, Debian, CentOS Stream, Rocky Linux y AlmaLinux. Las máquinas nuevas pueden tener actualizaciones en segundo plano que mantienen el bloqueo de APT; el script espera automáticamente, hasta 300 segundos por defecto. Ajusta con `APT_LOCK_WAIT=600`.

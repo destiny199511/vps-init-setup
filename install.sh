@@ -3,27 +3,83 @@ set -euo pipefail
 
 usage() {
     cat <<EOF
-Usage: sudo bash install.sh [options]
+VPS 一键装机安装脚本
 
-Options:
-  --repo-url URL      GitHub repository URL (default: ${REPO_URL})
-  --ref REF           GitHub release tag or branch to install (default: ${REF})
-  --install-dir DIR   Target directory (default: ${INSTALL_DIR})
-  --sha256 SHA256     Expected archive SHA-256 (recommended for production)
-  --insecure-skip-verify Skip checksum verification if checksum file is unavailable
-  --update-only       Update files without starting the setup wizard
-  --help              Show this help
+用法: sudo bash install.sh [选项]
 
-Environment variables:
-  VPS_INIT_SETUP_REPO_URL
-  VPS_INIT_SETUP_REF
-  VPS_INIT_SETUP_INSTALL_DIR
-  VPS_INIT_SETUP_SHA256
-  VPS_INIT_SETUP_INSECURE_SKIP_VERIFY
+选项:
+  --install-dir DIR   目标安装目录 (default: /opt/vps-init-setup)
+  --ref REF           安装的分支或标签 (default: main)
+  --repo-url URL      指定代码仓库 URL
+  --help, -h          显示此帮助信息
+
+其他参数将直接传递给 vps_setup.sh
 EOF
 }
 
-INSTALL_MARKER=".vps-init-setup-managed"
+INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
+REF="${VPS_INIT_SETUP_REF:-main}"
+REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
+PASSTHROUGH_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --install-dir)
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --ref)
+            REF="$2"
+            shift 2
+            ;;
+        --repo-url)
+            REPO_URL="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "错误: 请使用 root 权限或 sudo 运行此安装脚本。" >&2
+    exit 1
+fi
+
+if [ -z "$INSTALL_DIR" ] || [ "$INSTALL_DIR" = "/" ] || [ "$INSTALL_DIR" = "/etc" ] || [ "$INSTALL_DIR" = "/bin" ] || [ "$INSTALL_DIR" = "/sbin" ] || [ "$INSTALL_DIR" = "/usr" ] || [ "$INSTALL_DIR" = "/var" ]; then
+    echo "Refusing unsafe install directory: $INSTALL_DIR" >&2
+    exit 1
+fi
+
+install_package() {
+    local pkg="$1"
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -y >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y "$pkg" >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y "$pkg" >/dev/null 2>&1
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache "$pkg" >/dev/null 2>&1
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Sy --noconfirm "$pkg" >/dev/null 2>&1
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper install -y "$pkg" >/dev/null 2>&1
+    fi
+}
+
+for tool in curl tar; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "正在安装基础依赖 $tool..."
+        install_package "$tool"
+    fi
+done
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
 if [ -n "$SCRIPT_SOURCE" ] && [ "$SCRIPT_SOURCE" != "bash" ] && [ "$SCRIPT_SOURCE" != "-" ] && [ -f "$SCRIPT_SOURCE" ]; then
@@ -31,383 +87,56 @@ if [ -n "$SCRIPT_SOURCE" ] && [ "$SCRIPT_SOURCE" != "bash" ] && [ "$SCRIPT_SOURC
 else
     SCRIPT_DIR=""
 fi
-REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
-INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
-REF="${VPS_INIT_SETUP_REF:-main}"
-EXPECTED_SHA256="${VPS_INIT_SETUP_SHA256:-}"
-INSECURE_SKIP_VERIFY="${VPS_INIT_SETUP_INSECURE_SKIP_VERIFY:-false}"
-RUN_SETUP=true
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --repo-url)
-            REPO_URL="$2"
-            shift 2
-            ;;
-        --ref)
-            REF="$2"
-            shift 2
-            ;;
-        --install-dir)
-            INSTALL_DIR="$2"
-            shift 2
-            ;;
-        --sha256)
-            EXPECTED_SHA256="$2"
-            shift 2
-            ;;
-        --insecure-skip-verify)
-            INSECURE_SKIP_VERIFY=true
-            shift
-            ;;
-        --update-only)
-            RUN_SETUP=false
-            shift
-            ;;
-        --help|-h)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown argument: $1"
-            usage
-            exit 1
-            ;;
-    esac
-done
-
-REF="${REF# }"
-REF="${REF% }"
-
-if [ -n "$EXPECTED_SHA256" ] && [[ ! "$EXPECTED_SHA256" =~ ^[a-fA-F0-9]{64}$ ]]; then
-    echo "Expected SHA-256 must contain exactly 64 hexadecimal characters."
-    exit 1
-fi
-
-if [ "$(id -u)" -ne 0 ]; then
-    echo "This installer must be run as root or with sudo."
-    exit 1
-fi
-
-install_package() {
-    local pkg="$1"
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update >/dev/null 2>&1
-        apt-get install -y "$pkg" >/dev/null 2>&1
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y "$pkg" >/dev/null 2>&1
-    elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y "$pkg" >/dev/null 2>&1
-    elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache "$pkg" >/dev/null 2>&1
-    else
-        echo "Unsupported OS: could not install $pkg automatically."
-        exit 1
-    fi
-}
-
-for tool in curl tar; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "$tool not found. Installing $tool..."
-        install_package "$tool"
-    fi
-done
-
-normalize_repo() {
-    local repo="$1"
-    repo="${repo#git@github.com:}"
-    repo="${repo#https://github.com/}"
-    repo="${repo#http://github.com/}"
-    repo="${repo%.git}"
-    echo "$repo"
-}
-
-validate_install_dir() {
-    local install_parent install_owner install_mode
-
-    case "$INSTALL_DIR" in
-        /*) ;;
-        *)
-            echo "Install directory must be an absolute path: $INSTALL_DIR"
-            exit 1
-            ;;
-    esac
-    INSTALL_DIR="${INSTALL_DIR%/}"
-    [ -n "$INSTALL_DIR" ] || INSTALL_DIR="/"
-
-    if [[ "$INSTALL_DIR" == *$'\n'* || "$INSTALL_DIR" == *$'\r'* || "$INSTALL_DIR" == *'/./'* || "$INSTALL_DIR" == */. || "$INSTALL_DIR" == *'/../'* || "$INSTALL_DIR" == */.. ]]; then
-        echo "Install directory must not contain relative path components or control characters: $INSTALL_DIR"
-        exit 1
-    fi
-
-    case "$INSTALL_DIR" in
-        /opt/*|/srv/*|/usr/local/src/*) ;;
-        *)
-            echo "Refusing unsafe install directory: $INSTALL_DIR"
-            echo "Choose a dedicated directory below /opt, /srv, or /usr/local/src."
-            exit 1
-            ;;
-    esac
-    if [ -L "$INSTALL_DIR" ]; then
-        echo "Refusing symbolic-link install directory: $INSTALL_DIR"
-        exit 1
-    fi
-    if [ -e "$INSTALL_DIR" ] && [ ! -d "$INSTALL_DIR" ]; then
-        echo "Install path exists but is not a directory: $INSTALL_DIR"
-        exit 1
-    fi
-
-    install_parent="$(dirname "$INSTALL_DIR")"
-    if [ ! -d "$install_parent" ]; then
-        mkdir -p "$install_parent"
-    fi
-    if [ -L "$install_parent" ]; then
-        echo "Refusing install directory with symbolic-link parent: $install_parent"
-        exit 1
-    fi
-
-    if [ -d "$INSTALL_DIR" ]; then
-        # Ensure directory is owned by root and has safe permissions (0755)
-        chown root:root "$INSTALL_DIR" 2>/dev/null || true
-        chmod 755 "$INSTALL_DIR" 2>/dev/null || true
-
-        install_owner="$(stat -c '%u' "$INSTALL_DIR" 2>/dev/null || stat -f '%u' "$INSTALL_DIR" 2>/dev/null || true)"
-        install_mode="$(stat -c '%a' "$INSTALL_DIR" 2>/dev/null || stat -f '%Lp' "$INSTALL_DIR" 2>/dev/null || true)"
-        install_mode="${install_mode#0}"
-        if [ "$install_owner" != "0" ] || [ -z "$install_mode" ] || (( (8#$install_mode) & 022 )); then
-            echo "Install directory must be owned by root and not group/world writable: $INSTALL_DIR"
-            exit 1
-        fi
-
-        if [ -f "$INSTALL_DIR/$INSTALL_MARKER" ]; then
-            return 0
-        fi
-        if [ -f "$INSTALL_DIR/vps_setup.sh" ] && [ -d "$INSTALL_DIR/lib" ] && [ -d "$INSTALL_DIR/modules" ]; then
-            echo "Adopting a secure legacy installation at $INSTALL_DIR"
-            return 0
-        fi
-        if [ -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-            echo "Refusing non-empty directory that is not a vps-init-setup installation: $INSTALL_DIR"
-            exit 1
-        fi
-    fi
-}
-
-validate_release_tree() {
-    local release_dir required_file
-
-    release_dir="$1"
-    if find "$release_dir" -xdev -type l -print -quit | grep -q .; then
-        echo "Downloaded release contains symbolic links; refusing to install it."
-        exit 1
-    fi
-    for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh lib/i18n.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
-        if [ ! -f "$release_dir/$required_file" ]; then
-            echo "Downloaded release is incomplete: missing $required_file"
-            exit 1
-        fi
-    done
-}
-
-resolve_release_tag() {
-    local repo="$1"
-    local requested_ref="$2"
-    local tag_name=""
-
-    if [ "$requested_ref" = "latest" ] || [ -z "$requested_ref" ]; then
-        # 1. 优先通过 GitHub releases/latest 302 重定向解析，不消耗 GitHub API 速率配额
-        tag_name="$(curl -sI "https://github.com/${repo}/releases/latest" 2>/dev/null | grep -i '^location:' | sed -n 's/.*tag\/\([^[:space:]\r\n]*\).*/\1/p' | head -n 1)"
-
-        # 2. 如果重定向解析失败，尝试通过 GitHub REST API 获取
-        if [ -z "$tag_name" ]; then
-            local api_url="https://api.github.com/repos/${repo}/releases/latest"
-            local release_json
-            release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
-            tag_name="$(printf '%s\n' "$release_json" | grep -o '"tag_name": *"[^"]*"' | sed 's/.*"tag_name": *"//; s/"$//' | head -n 1)"
-        fi
-
-        if [ -n "$tag_name" ]; then
-            printf '%s\n' "$tag_name"
-        else
-            printf 'main\n'
-        fi
-    else
-        printf '%s\n' "$requested_ref"
-    fi
-}
-
-resolve_download_url() {
-    local repo="$1"
-    local release_tag="$2"
-    local api_url release_json asset_url direct_asset
-
-    if [ "$release_tag" = "latest" ] || [ -z "$release_tag" ]; then
-        release_tag="$(resolve_release_tag "$repo" "$release_tag")"
-    fi
-
-    if [ -n "$release_tag" ] && [ "$release_tag" != "main" ] && [ "$release_tag" != "master" ]; then
-        # 1. 优先直接探测标准的 Release 资产 URL（不依赖 API，速度快且无速率限制）
-        direct_asset="https://github.com/${repo}/releases/download/${release_tag}/vps-init-setup-${release_tag}.tar.gz"
-        if curl -fsSLI "$direct_asset" >/dev/null 2>&1; then
-            printf '%s\n' "$direct_asset"
-            return 0
-        fi
-
-        # 2. 尝试从 GitHub Release API 查找匹配的发布资产
-        api_url="https://api.github.com/repos/${repo}/releases/tags/${release_tag}"
-        release_json="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: vps-init-setup-installer' "$api_url" 2>/dev/null || true)"
-        asset_url="$(printf '%s\n' "$release_json" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"browser_download_url": *"//; s/"$//' | grep -E 'vps-init-setup.*(\.tar\.gz|\.tgz)$' | head -n 1 || true)"
-        if [ -n "$asset_url" ]; then
-            printf '%s\n' "$asset_url"
-            return 0
-        fi
-    fi
-
-    # 3. 回退到 GitHub 自动源码归档
-    if [ "$release_tag" = "main" ] || [ "$release_tag" = "master" ] || [ -z "$release_tag" ]; then
-        printf 'https://github.com/%s/archive/refs/heads/%s.tar.gz\n' "$repo" "$release_tag"
-    else
-        printf 'https://github.com/%s/archive/refs/tags/%s.tar.gz\n' "$repo" "$release_tag"
-    fi
-}
-
-verify_release_checksum() {
-    local archive_file="$1"
-    local archive_url="$2"
-    local checksum_url checksum_file expected_checksum actual_checksum
-
-    if [ -n "$EXPECTED_SHA256" ]; then
-        expected_checksum="$EXPECTED_SHA256"
-        actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
-        if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
-            echo "Release checksum verification failed."
-            exit 1
-        fi
-        echo "Release checksum verified."
-        return 0
-    fi
-
-    case "$archive_url" in
-        */archive/refs/heads/*)
-            echo "Warning: installing an unpinned development branch archive. Use a release tag and --sha256 for production."
-            return 0
-            ;;
-        */archive/refs/tags/*)
-            checksum_url="${archive_url}.sha256"
-            checksum_file="${archive_file}.sha256"
-            if curl -fsSL "$checksum_url" -o "$checksum_file" 2>/dev/null; then
-                expected_checksum="$(awk 'NF {print $1; exit}' "$checksum_file")"
-                actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
-                if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
-                    echo "Release checksum verification failed."
-                    exit 1
-                fi
-                echo "Release checksum verified."
-            else
-                echo "Note: upstream tag archive does not provide an independent .sha256 file; proceeding."
-            fi
-            return 0
-            ;;
-    esac
-
-    checksum_url="${archive_url}.sha256"
-    checksum_file="${archive_file}.sha256"
-    if curl -fsSL "$checksum_url" -o "$checksum_file" 2>/dev/null; then
-        expected_checksum="$(awk 'NF {print $1; exit}' "$checksum_file")"
-        actual_checksum="$(sha256sum "$archive_file" | awk '{print $1}')"
-        if [[ ! "$expected_checksum" =~ ^[a-fA-F0-9]{64}$ ]] || [ "$expected_checksum" != "$actual_checksum" ]; then
-            echo "Release checksum verification failed."
-            exit 1
-        fi
-        echo "Release checksum verified."
-    else
-        if [ "$INSECURE_SKIP_VERIFY" = "true" ]; then
-            echo "Warning: upstream release checksum file is not available; skipping verification due to --insecure-skip-verify."
-        else
-            echo "Error: Release checksum file ($checksum_url) could not be downloaded and --sha256 was not specified."
-            echo "Refusing to install unverified package to prevent supply chain tampering."
-            echo "Specify --sha256 <hash> or pass --insecure-skip-verify to bypass verification."
-            exit 1
-        fi
-    fi
-}
 
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/vps_setup.sh" ]; then
-    echo "Using local repository at $SCRIPT_DIR"
     INSTALL_DIR="$SCRIPT_DIR"
 else
-    validate_install_dir
-    repo_path="$(normalize_repo "$REPO_URL")"
-    release_tag="$(resolve_release_tag "$repo_path" "$REF")"
-    archive_url="$(resolve_download_url "$repo_path" "$release_tag")"
+    echo "正在下载 VPS 初始化脚本 (${REF})..."
+    mkdir -p "$INSTALL_DIR"
 
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' EXIT
 
-    echo "Installing release ${release_tag} from ${archive_url}"
-    if ! curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz"; then
-        echo "Failed to download release archive: $archive_url"
-        echo "Check the repository URL, release reference, and network connection."
-        exit 1
+    repo="${REPO_URL#git@github.com:}"
+    repo="${repo#https://github.com/}"
+    repo="${repo#http://github.com/}"
+    repo="${repo%.git}"
+
+    archive_url="https://github.com/${repo}/archive/refs/heads/${REF}.tar.gz"
+    if ! curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz" 2>/dev/null; then
+        archive_url="https://github.com/${repo}/archive/refs/tags/${REF}.tar.gz"
+        if ! curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz"; then
+            echo "错误: 下载源码包失败，请检查网络连接或仓库地址。" >&2
+            exit 1
+        fi
     fi
-    verify_release_checksum "$tmp_dir/source.tar.gz" "$archive_url"
-    if tar -tzf "$tmp_dir/source.tar.gz" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
-        echo "Downloaded release contains unsafe archive paths; refusing to extract it."
-        exit 1
-    fi
+
+    echo "正在解压并安装到 ${INSTALL_DIR} ..."
     mkdir -p "$tmp_dir/extracted"
     tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/extracted"
 
-    if [ -f "$tmp_dir/extracted/vps_setup.sh" ]; then
-        extracted_dir="$tmp_dir/extracted"
-    else
-        extracted_dir="$(find "$tmp_dir/extracted" -maxdepth 1 -mindepth 1 -type d -exec test -f '{}/vps_setup.sh' ';' -print | head -n 1)"
-    fi
-    if [ -z "$extracted_dir" ]; then
-        echo "Failed to extract the downloaded archive."
+    extracted_dir="$(find "$tmp_dir/extracted" -maxdepth 2 -name "vps_setup.sh" -exec dirname {} \; | head -n 1)"
+    if [ -z "$extracted_dir" ] || [ ! -f "$extracted_dir/vps_setup.sh" ]; then
+        echo "错误: 源码包解压失败或缺少核心文件。" >&2
         exit 1
     fi
 
-    validate_release_tree "$extracted_dir"
+    # 保留用户现有配置与日志
+    rm -rf "$extracted_dir/logs" "$extracted_dir/backups"
+    if [ -f "$INSTALL_DIR/config/vps_config.conf" ]; then
+        rm -rf "$extracted_dir/config"
+    fi
 
-    # Runtime state belongs to the target host, never to a source archive.
-    rm -rf "$extracted_dir/config" "$extracted_dir/logs" "$extracted_dir/backups"
-
-    # Keep INSTALL_DIR itself so callers currently in it retain a valid cwd.
     mkdir -p "$INSTALL_DIR"
-    find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 \
-        ! -name config ! -name logs ! -name backups ! -name "$INSTALL_MARKER" \
-        -exec rm -rf -- {} +
-    cp -a --no-preserve=ownership "$extracted_dir/." "$INSTALL_DIR/"
-    chown -R root:root "$INSTALL_DIR" 2>/dev/null || true
-    chmod 755 "$INSTALL_DIR" 2>/dev/null || true
+    cp -a "$extracted_dir/." "$INSTALL_DIR/"
 fi
 
 cd "$INSTALL_DIR"
-chmod +x vps_setup.sh
+chmod +x vps_setup.sh lib/*.sh modules/*.sh 2>/dev/null || chmod +x vps_setup.sh
 
-for required_file in vps_setup.sh lib/core.sh lib/common.sh lib/tui.sh lib/i18n.sh modules/{00_preflight,01_hostname,02_locale_timezone,03_dns,04_user,05_ssh,06_firewall,07_fail2ban,08_docker,09_network,10_backup,11_monitoring,12_security,13_cleanup}.sh; do
-    if [ ! -f "$INSTALL_DIR/$required_file" ]; then
-        echo "Installation is incomplete: missing $INSTALL_DIR/$required_file"
-        exit 1
-    fi
-done
-
-if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
-    printf 'managed-by=vps-init-setup\n' > "$INSTALL_DIR/$INSTALL_MARKER"
-    chmod 600 "$INSTALL_DIR/$INSTALL_MARKER"
-fi
-
-if [ "$RUN_SETUP" = "false" ]; then
-    echo "Update complete. Setup wizard was not started."
-    exit 0
-fi
-
-echo "Starting VPS setup..."
-echo "Install directory: $INSTALL_DIR"
-# 默认进入交互模式，只有在需要无人值守安装时才传递 -n
+echo "安装完成，正在启动初始化向导..."
 if [ -r /dev/tty ]; then
-    exec bash ./vps_setup.sh </dev/tty >/dev/tty 2>&1
+    exec bash ./vps_setup.sh "${PASSTHROUGH_ARGS[@]}" </dev/tty >/dev/tty 2>&1
 else
-    exec bash ./vps_setup.sh
+    exec bash ./vps_setup.sh "${PASSTHROUGH_ARGS[@]}"
 fi

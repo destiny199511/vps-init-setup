@@ -122,43 +122,6 @@ tail -f logs/vps_setup_*.log
 sudo ./vps_setup.sh --help
 ```
 
-## 更新とファイルの場所
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-  | sudo bash -s -- --update-only
-```
-
-`install.sh` の主なオプション：
-- `--ref <tag|branch>`：対象のリリースタグまたはブランチを指定（デフォルトは `main` ブランチの最新コード。`v2.0.0` などのタグも指定可能）。
-- `--sha256 <hash>`：アーカイブの期待される SHA-256 ハッシュ（本番環境推奨）。
-- `--insecure-skip-verify`：チェックサムファイルが存在しない場合に検証をスキップ。
-- `--update-only`：設定ウィザードを起動せずにスクリプトファイルを更新。
-
-更新時には `config/`、`logs/`、`backups/` が保持されます。主要なファイル：
-
-- 設定：`config/vps_config.conf`
-- 実行結果：`config/install-result.env`
-- 実行ログ：`logs/vps_setup_*.log`
-- セキュリティ監査ログ：`logs/audit_*.log`
-- 自動バックアップと設定スナップショット：`backups/`
-
-> `--rollback` はまだ完全には実装されていません。復元が必要な場合は `backups/` 内のスナップショットを使用してください。
-
-## トラブルシューティングと検証
-
-- **最新コードの直接ワンラインインストール**:
-  README 記載のデフォルトコマンドを実行するだけで、`main` ブランチの最新コードが直接インストールされます：
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
-  ```
-- **リリース検証**: インストーラーは GitHub Releases からパッケージと `.sha256` ファイルを自動的に取得して整合性を検証します。チェックサムファイルがないソースアーカイブの場合も、処理を中断せずに継続します。
-- **SHA-256 による特定バージョンの固定**:
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh \
-    | sudo bash -s -- --ref v2.0.0 --sha256 <hash>
-  ```
-
 ## 互換性
 
 主に Ubuntu、Debian、CentOS Stream、Rocky Linux、AlmaLinux などの一般的な VPS ディストリビューションを対象としています。新しいマシンではバックグラウンド更新が APT ロックを保持している場合があります。スクリプトは自動的に待機し、デフォルトで最大 300 秒待ちます。`APT_LOCK_WAIT=600` で調整できます。
