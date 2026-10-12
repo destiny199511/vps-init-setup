@@ -9,15 +9,38 @@
 
 ## 开始使用
 
-在新的 VPS 上以 `root` 或 `sudo` 运行：
+### 快速开始 (推荐)
+
+在全新 Linux VPS 上以 `root` 或 `sudo` 用户执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+# 1. 克隆代码仓库
+git clone https://github.com/destiny199511/vps-init-setup.git
+cd vps-init-setup
+
+# 2. 启动交互式装机向导
+sudo ./vps_setup.sh
 ```
 
-安装器默认将项目放在 `/opt/vps-init-setup`，随后会启动交互式主菜单。
+### 生产环境安全安装 (校验 Release 签名与归档)
 
-> 修改 SSH 端口或防火墙前，请保留当前会话。执行完成后，先在新终端测试 SSH 登录成功，再关闭旧会话。
+生产环境中，推荐通过官方发布的不可变 Git commit 与独立 SHA-256 校验和安装：
+
+```bash
+export VPS_COMMIT="<40-hex-commit>"
+export ARCHIVE_SHA256="<release-archive-sha256>"
+export INSTALLER_SHA256="<release-installer-sha256>"
+
+# 下载并校验引导安装器
+curl -fsSLo install.sh "https://raw.githubusercontent.com/destiny199511/vps-init-setup/${VPS_COMMIT}/install.sh"
+printf '%s  %s\n' "$INSTALLER_SHA256" install.sh | sha256sum -c -
+
+# 校验源码包并安装至 /opt/vps-init-setup
+sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256"
+```
+
+> 💡 **版本校验**：每个 Release 附带 `source-commit.txt`、SHA-256 清单与 GitHub 构建来源签名证明（可用 `gh attestation verify` 检验）。
+> ⚠️ **防失联提醒**：修改 SSH 端口或防火墙前，请保持当前连接。装机完成后，先在新终端验证登录成功，再断开旧终端。
 
 ## 配置方式
 
@@ -138,6 +161,34 @@ tail -f logs/vps_setup_*.log
 ```bash
 sudo ./vps_setup.sh --help
 ```
+
+## 更新与文件位置
+
+更新操作也必须使用相同的固定 commit 和独立验证的 SHA-256：
+
+```bash
+sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256" --update-only
+```
+
+`install.sh` 支持的常用参数：
+- `--ref <40-hex-commit>`：指定不可变的 40 位 Git commit（远程安装必填）。
+- `--sha256 <hash>`：指定该 commit 源码归档的独立发布 SHA-256（远程安装必填）。
+- `--update-only`：仅同步更新脚本与模块文件，不自动启动配置向导。
+
+更新会保留 `config/`、`logs/` 与 `backups/`。关键文件：
+
+- 配置：`config/vps_config.conf`
+- 执行结果：`config/install-result.env`
+- 运行日志：`logs/vps_setup_*.log`
+- 安全审计日志：`logs/audit_*.log`
+- 自动备份与配置快照：`backups/`
+
+> `--rollback` 支持自动恢复本次装机修改的受跟踪系统配置文件；系统账号、软件包及内核模块可配合 `backups/` 快照与审计日志按需恢复。
+
+## 常见问题与安装排查
+
+- **生产安装与防篡改**：
+  不支持拉取可变分支或跳过校验。先从经过独立验证的 Release 发布记录取得 commit 和两个 SHA-256，再按顶部流程验证安装器与源码归档。
 
 ## 兼容性
 

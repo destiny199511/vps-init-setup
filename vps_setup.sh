@@ -25,6 +25,14 @@ fi
 
 # 脚本根目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 前置预扫描 --dry-run 参数，确保在 core.sh 初始化阶段完全遵循 0 写盘契约
+for arg in "$@"; do
+    case "$arg" in
+        -d|--dry-run) export DRY_RUN=true ;;
+    esac
+done
+
 source "${SCRIPT_DIR}/lib/core.sh"
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/tui.sh"
@@ -37,7 +45,17 @@ cleanup_on_exit() {
     local exit_code=$?
     if [ "$exit_code" -ne 0 ] && [ "$SETUP_COMPLETED" != "true" ] && [ "${ACTION:-}" = "install" ]; then
         echo -e "\n\033[1;33m[WARN]\033[0m 操作中断或异常退出 (退出代码: $exit_code)。" >&2
-        echo -e "如需回滚已备份的配置更改，可执行: \033[1;36msudo $0 --rollback\033[0m" >&2
+        if [ "${TRANSACTION_ACTIVE:-false}" = "true" ] && [ "${DRY_RUN:-false}" != "true" ]; then
+            echo -e "正在自动恢复本次事务中受跟踪的配置文件..." >&2
+            if rollback_all; then
+                transaction_finish rolled-back || true
+                echo -e "受跟踪的配置文件已恢复；账号、软件包、服务、运行态防火墙与内核设置仍需人工确认。" >&2
+            else
+                transaction_finish rollback-failed || true
+                echo -e "受跟踪配置文件自动恢复未完全成功；请立即检查事务快照。" >&2
+            fi
+        fi
+        echo -e "如需再次执行文件级回滚，可执行: \033[1;36msudo $0 --rollback\033[0m" >&2
         echo -e "详细排查日志请查看: \033[1;36m${LOG_FILE:-${LOGS_DIR}}\033[0m\n" >&2
     fi
 }
@@ -51,12 +69,14 @@ if [ -z "${VPS_SETUP_HOSTNAME:-}" ]; then
 fi
 
 # 确保目录存在
-mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}"
+if [ "${DRY_RUN:-false}" != "true" ]; then
+    mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}"
+fi
 
 # 全局变量
 INTERACTIVE_MODE=true
 NON_INTERACTIVE=false
-DRY_RUN=false
+DRY_RUN="${DRY_RUN:-false}"
 FORCE_MODE=false
 FORCE=false
 AUTO_YES="${AUTO_YES:-false}"
@@ -589,7 +609,7 @@ configure_user() {
     export SSH_PUBKEY="$ssh_pubkey"
     export PASSWORD_AUTH="$password_auth"
     export SSH_PUBKEY_AUTH="$ssh_pubkey_auth"
-    export USER_PASSWORD="$user_password"
+    USER_PASSWORD="$user_password"
 
     return 0
 }
@@ -598,8 +618,10 @@ configure_user() {
 set_or_change_user_password() {
     local target_user="${1:-${USERNAME:-appadmin}}"
     local new_password=""
+    local supplied_password="${USER_PASSWORD:-${VPS_SETUP_USER_PASSWORD:-}}"
     local confirm_password=""
     local res=0
+    unset USER_PASSWORD VPS_SETUP_USER_PASSWORD
 
     print_section "设置 / 修改用户密码"
     echo -e "${DIM}为指定管理账户设定或更新登录与 Sudo 凭据 (输入 b 可返回)${NC}"
@@ -629,11 +651,13 @@ set_or_change_user_password() {
         user_exists=true
         log_info "目标用户 '$target_user' 已存在于系统中"
     else
-        log_info "目标用户 '$target_user' 尚未在系统中创建（密码将暂存至配置并在装机时生效）"
+        log_error "目标用户 '$target_user' 尚未在系统中创建；--set-password 不会持久化密码"
+        log_error "请在创建用户的同一次装机运行中通过 VPS_SETUP_USER_PASSWORD 提供一次性密码"
+        return 1
     fi
 
     if [ "${NON_INTERACTIVE:-false}" = "true" ] || [ "${AUTO_YES:-false}" = "true" ]; then
-        new_password="${USER_PASSWORD:-}"
+        new_password="$supplied_password"
         if [ -z "$new_password" ]; then
             log_error "非交互模式下请通过 USER_PASSWORD 或 VPS_SETUP_USER_PASSWORD 提供新密码"
             return 1
@@ -664,23 +688,21 @@ set_or_change_user_password() {
         done
     fi
 
-    if [ "$user_exists" = true ]; then
-        log_info "正在为用户 '$target_user' 更新系统密码..."
-        if printf '%s:%s\n' "$target_user" "$new_password" | chpasswd 2>/dev/null; then
-            log_ok "用户 '$target_user' 的系统密码已成功设置！"
-            audit "USER_PASSWORD_SET" "username=$target_user"
-        else
-            log_error "更新用户 '$target_user' 密码失败"
-            return 1
-        fi
+    log_info "正在为用户 '$target_user' 更新系统密码..."
+    if printf '%s:%s\n' "$target_user" "$new_password" | chpasswd 2>/dev/null; then
+        log_ok "用户 '$target_user' 的系统密码已成功设置！"
+        audit "USER_PASSWORD_SET" "username=$target_user"
+    else
+        log_error "更新用户 '$target_user' 密码失败"
+        return 1
     fi
 
-    export USER_PASSWORD="$new_password"
     export USERNAME="$target_user"
     # shellcheck disable=SC2046
     save_config "$CONFIG_FILE" $(get_config_var_names)
+    unset new_password supplied_password USER_PASSWORD VPS_SETUP_USER_PASSWORD
 
-    echo -e "\n${GREEN}✔ 用户 ${target_user} 的密码已成功设定并同步保存！${NC}"
+    echo -e "\n${GREEN}✔ 用户 ${target_user} 的密码已成功设定；密码未写入配置文件。${NC}"
     if [ "${NON_INTERACTIVE:-false}" != "true" ] && [ "${AUTO_YES:-false}" != "true" ] && tui_is_supported; then
         read -rp "按任意键返回..." -n1
     fi
@@ -1406,7 +1428,7 @@ module_requires_runtime_check() {
     # These modules are idempotent and cheap; always run them so config drift
     # (e.g. timezone/locale changed after an earlier run) gets re-applied.
     case "$1" in
-        01_hostname|02_locale_timezone|05_ssh|06_firewall|07_fail2ban) return 0 ;;
+        00_preflight|01_hostname|02_locale_timezone|05_ssh|06_firewall|07_fail2ban) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1628,16 +1650,16 @@ fi
 init_system
 print_startup_banner "$MODE_LABEL"
 
-# 如果是非交互模式，尝试加载配置
-if [ "$NON_INTERACTIVE" = true ]; then
-    if [ -f "$CONFIG_FILE" ]; then
-        log_info "从配置文件加载配置: $CONFIG_FILE"
-        load_config "$CONFIG_FILE"
-        apply_config_defaults
-    else
+# 尝试加载已有配置或应用默认值
+if [ -f "$CONFIG_FILE" ]; then
+    log_info "从配置文件加载配置: $CONFIG_FILE"
+    load_config "$CONFIG_FILE"
+    apply_config_defaults
+else
+    if [ "$NON_INTERACTIVE" = true ]; then
         log_warn "配置文件不存在，将使用默认值。"
-        apply_config_defaults
     fi
+    apply_config_defaults
 fi
 
 # 如果是交互模式，运行主菜单
@@ -1652,10 +1674,17 @@ fi
 # 确保所有变量都有默认值
 apply_config_defaults
 
-# 打印配置摘要（调试用）
+# 打印配置摘要（调试用，脱敏处理敏感凭据）
 log_debug "=== 配置摘要 ==="
 for var in $(get_config_var_names); do
-    log_debug "$var=${!var:-}"
+    case "$var" in
+        *PASSWORD*|*PASSWD*|*SECRET*|*TOKEN*|*KEY*)
+            log_debug "$var=[REDACTED]"
+            ;;
+        *)
+            log_debug "$var=${!var:-}"
+            ;;
+    esac
 done
 log_debug "=================="
 
@@ -1679,6 +1708,12 @@ case "$ACTION" in
         ;;
     rollback)
         log_info "开始回滚操作..."
+        latest_transaction_registry=""
+        latest_transaction_registry="$(find_latest_transaction_registry || true)"
+        if [ -n "$latest_transaction_registry" ]; then
+            BACKUP_REGISTRY="$latest_transaction_registry"
+            log_info "选择最近的事务快照: $(dirname "$BACKUP_REGISTRY")"
+        fi
         if [ ! -f "${BACKUP_REGISTRY}" ] || [ ! -s "${BACKUP_REGISTRY}" ]; then
             log_warn "未发现任何备份记录 (${BACKUP_REGISTRY})，无可回滚的文件。"
             echo -e "${YELLOW}提示: 备份目录位于: ${BACKUPS_DIR}${NC}"
@@ -1686,7 +1721,7 @@ case "$ACTION" in
         fi
 
         if [ "$NON_INTERACTIVE" != true ] && [ "${AUTO_YES:-false}" != true ]; then
-            local confirm_rollback=""
+            confirm_rollback=""
             if tui_is_supported; then
                 tui_card_confirm "确认回滚" "确定要回滚所有已备份的系统配置文件吗？" false || {
                     log_info "用户取消回滚操作。"
@@ -1718,8 +1753,9 @@ case "$ACTION" in
             log_ok "SSH 服务配置验证通过并已重新加载"
         fi
 
-        log_ok "系统配置已成功回滚！"
-        echo -e "\n${GREEN}✔ 所有已备份的系统配置文件已恢复完毕。${NC}"
+        log_ok "受跟踪的配置文件已恢复至最初基线！"
+        echo -e "\n${GREEN}✔ 所有已登记备份的系统配置文件已恢复完毕。${NC}"
+        echo -e "${YELLOW}注: 系统新建账号、软件包及内核模块若需移除，请按安全规范手工确认。${NC}"
         SETUP_COMPLETED=true
         exit 0
         ;;
@@ -1774,6 +1810,13 @@ fi
 if ! confirm_configuration_review "${#MODULES_TO_RUN[@]}"; then
     log_warn "用户取消安装。"
     exit 1
+fi
+
+if [ "$DRY_RUN" != true ]; then
+    if ! transaction_start; then
+        log_error "无法创建本次运行的文件级事务快照目录"
+        exit 1
+    fi
 fi
 
 # 配置确认后执行模块时复用向导结果，避免模块再次询问已确认的参数
@@ -1887,7 +1930,7 @@ MODULE_SUMMARY_LINES+=$'\n'"  合计: ${GREEN}✓ ${DONE_COUNT}${NC}  ${RED}✗ 
 # 探测 IP、生成体检报告并写结果文件
 SERVER_IP="$(detect_server_ip || true)"
 HEALTH_CHECK_FAILED=false
-if ! print_health_report "$DRY_RUN"; then
+if [ "$DRY_RUN" = false ] && ! print_health_report false; then
     HEALTH_CHECK_FAILED=true
     log_warn "配置体检发现偏差，请查看报告并按日志排查。"
 fi
@@ -1898,9 +1941,15 @@ fi
 # 完成卡片
 print_completion_card "${ELAPSED}" "${DRY_RUN}" "${SERVER_IP}" "${MODULE_SUMMARY_LINES}"
 
-SETUP_COMPLETED=true
 if { [ "$FAILED_COUNT" -gt 0 ] || [ "$HEALTH_CHECK_FAILED" = true ]; } && [ "$DRY_RUN" = false ]; then
     exit 1
 fi
+
+if [ "$DRY_RUN" = false ] && ! transaction_finish committed; then
+    log_error "无法标记本次事务为已提交"
+    exit 1
+fi
+
+SETUP_COMPLETED=true
 
 exit 0

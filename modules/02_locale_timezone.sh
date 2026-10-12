@@ -118,15 +118,25 @@ locale_timezone_main() {
         log_info "Generating locale: $target_locale"
         case "$(detect_package_manager)" in
             apt)
-                # Ensure language packs exist for common non-C locales.
-                case "$target_locale" in
-                    zh_CN.UTF-8|zh_CN.utf8)
-                        install_package language-pack-zh-hans 2>/dev/null || true
-                        ;;
-                    zh_TW.UTF-8|zh_TW.utf8)
-                        install_package language-pack-zh-hant 2>/dev/null || true
-                        ;;
-                esac
+                # Ensure locales tool is installed on Debian/Ubuntu
+                if ! command -v locale-gen >/dev/null 2>&1; then
+                    install_package locales || true
+                fi
+                # Ensure language packs exist for common non-C locales on Ubuntu only.
+                if [ "${OS:-$(detect_os_id 2>/dev/null || true)}" = "ubuntu" ]; then
+                    case "$target_locale" in
+                        zh_CN.UTF-8|zh_CN.utf8)
+                            if apt-cache show language-pack-zh-hans >/dev/null 2>&1; then
+                                install_package language-pack-zh-hans 2>/dev/null || true
+                            fi
+                            ;;
+                        zh_TW.UTF-8|zh_TW.utf8)
+                            if apt-cache show language-pack-zh-hant >/dev/null 2>&1; then
+                                install_package language-pack-zh-hant 2>/dev/null || true
+                            fi
+                            ;;
+                    esac
+                fi
                 # Explicitly enable the requested locale before generation.
                 if [ -f /etc/locale.gen ]; then
                     backup_file /etc/locale.gen >/dev/null 2>&1 || true

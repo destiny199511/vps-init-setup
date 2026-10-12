@@ -11,6 +11,25 @@ user_prerequisites() {
     return 0
 }
 
+write_sudoers_rule() {
+    local username="$1"
+    local rule="$2"
+    local target="/etc/sudoers.d/$username"
+    local candidate
+
+    candidate="$(mktemp "/etc/sudoers.d/.${username}.XXXXXX")" || return 1
+    printf '%s\n' "$rule" > "$candidate"
+    chmod 440 "$candidate"
+    if ! visudo -cf "$candidate" >/dev/null 2>&1; then
+        rm -f "$candidate"
+        log_error "Generated sudoers rule failed validation"
+        return 1
+    fi
+    install -o root -g root -m 440 "$candidate" "$target"
+    rm -f "$candidate"
+    visudo -cf "$target" >/dev/null 2>&1
+}
+
 user_main() {
     log_info "Starting user configuration..."
     
@@ -82,9 +101,17 @@ user_main() {
     local user_shell="${USER_SHELL:-/bin/bash}"
     local create_home="${CREATE_HOME:-true}"
     local add_to_sudo="${ADD_TO_SUDO:-true}"
+    local sudo_nopasswd="${SUDO_NOPASSWD:-false}"
     local setup_ssh="${SETUP_SSH:-true}"
     local pubkey_authentication="${SSH_PUBKEY_AUTHENTICATION:-${SSH_PUBKEY_AUTH:-yes}}"
     local password_authentication="${PASSWORD_AUTH:-no}"
+    local user_password="${USER_PASSWORD:-${VPS_SETUP_USER_PASSWORD:-}}"
+    unset USER_PASSWORD VPS_SETUP_USER_PASSWORD
+
+    if [ "$sudo_nopasswd" = "true" ]; then
+        log_error "SUDO_NOPASSWD=true is not allowed by the production profile"
+        return 1
+    fi
     
     # Create user if doesn't exist
     if ! id "$username" &>/dev/null; then
@@ -199,15 +226,9 @@ user_main() {
         sudo_group=$(getent group sudo | cut -d: -f1)
         [ -z "$sudo_group" ] && sudo_group="wheel"  # RHEL/CentOS uses wheel
         
-        local sudo_nopasswd="${SUDO_NOPASSWD:-false}"
         local sudo_rule
-        if [ "$sudo_nopasswd" = "true" ]; then
-            sudo_rule="$username ALL=(ALL) NOPASSWD:ALL"
-            log_warn "Configuring sudo with NOPASSWD for $username (Root privileges without password verification)"
-        else
-            sudo_rule="$username ALL=(ALL) ALL"
-            log_info "Configuring sudo with password verification for $username"
-        fi
+        sudo_rule="$username ALL=(ALL) ALL"
+        log_info "Configuring sudo with password verification for $username"
 
         # Add to appropriate group
         case "$(detect_package_manager)" in
@@ -217,8 +238,7 @@ user_main() {
                     log_info "Added user to sudo group"
                     changes_made=true
                 fi
-                echo "$sudo_rule" > "/etc/sudoers.d/$username"
-                chmod 440 "/etc/sudoers.d/$username"
+                write_sudoers_rule "$username" "$sudo_rule" || return 1
                 log_info "Configured sudoers rule for $username"
                 changes_made=true
                 ;;
@@ -228,8 +248,7 @@ user_main() {
                     log_info "Added user to wheel group"
                     changes_made=true
                 fi
-                echo "$sudo_rule" > "/etc/sudoers.d/$username"
-                chmod 440 "/etc/sudoers.d/$username"
+                write_sudoers_rule "$username" "$sudo_rule" || return 1
                 log_info "Configured sudoers rule for $username"
                 changes_made=true
                 ;;
@@ -240,8 +259,7 @@ user_main() {
                 elif getent group wheel >/dev/null 2>&1; then
                     usermod -aG wheel "$username"
                 fi
-                echo "$sudo_rule" > "/etc/sudoers.d/$username"
-                chmod 440 "/etc/sudoers.d/$username"
+                write_sudoers_rule "$username" "$sudo_rule" || return 1
                 log_info "Configured sudo access for $username"
                 changes_made=true
                 ;;
@@ -249,25 +267,24 @@ user_main() {
         
         # Verify sudoers syntax
         if ! visudo -c >/dev/null 2>&1; then
-            log_error "Invalid sudoers configuration - please check manually"
-            # Don't fail completely as this might be a false positive in some envs
+            log_error "Invalid sudoers configuration"
+            return 1
         fi
         
         audit "SUDO_CONFIGURED" "username=$username nopasswd=$sudo_nopasswd"
     fi
     
     # Set or update user password if provided, or verify existing password if password auth is enabled
-    local user_password="${USER_PASSWORD:-}"
     if [ -n "$user_password" ]; then
         log_info "Setting password for user: $username"
         if printf '%s:%s\n' "$username" "$user_password" | chpasswd 2>/dev/null; then
             log_info "Password set successfully"
             changes_made=true
             audit "USER_PASSWORD_SET" "username=$username"
-            unset user_password USER_PASSWORD
+            unset user_password USER_PASSWORD VPS_SETUP_USER_PASSWORD
         else
             log_error "Failed to set password for user: $username"
-            unset user_password USER_PASSWORD
+            unset user_password USER_PASSWORD VPS_SETUP_USER_PASSWORD
             return 1
         fi
     elif [ "$password_authentication" = "yes" ]; then
@@ -278,7 +295,7 @@ user_main() {
             return 1
         fi
     fi
-    unset user_password USER_PASSWORD
+    unset user_password USER_PASSWORD VPS_SETUP_USER_PASSWORD
     
     # Final verification
     if id "$username" &>/dev/null; then

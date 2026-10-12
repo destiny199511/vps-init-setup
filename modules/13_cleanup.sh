@@ -22,6 +22,14 @@ cleanup_prerequisites() {
     return 0
 }
 
+require_irreversible_cleanup_confirmation() {
+    if [ "${IRREVERSIBLE_CLEANUP_CONFIRMED:-false}" = "true" ]; then
+        return 0
+    fi
+    log_error "Destructive cleanup requires IRREVERSIBLE_CLEANUP_CONFIRMED=true"
+    return 1
+}
+
 cleanup_main() {
     log_info "Starting system cleanup and optimization..."
 
@@ -127,10 +135,12 @@ EOF
 
     # ── 2. 卸载 snap (Ubuntu) ───────────────────────────────────
 
-    local remove_snap="${REMOVE_SNAP:-true}"
+    local remove_snap="${REMOVE_SNAP:-false}"
 
     if [[ "$remove_snap" != "true" ]]; then
         log_info "Snap removal disabled (REMOVE_SNAP=false), skipping"
+    elif ! require_irreversible_cleanup_confirmation; then
+        return 1
     elif [[ "$OS_ID" != "ubuntu" ]] && [[ "$OS_ID" != "ubuntu-core" ]]; then
         log_info "Snap not found (OS: ${OS_ID}), skipping snap removal"
     elif ! command_exists snap; then
@@ -180,10 +190,12 @@ EOF
 
     # ── 3. 清理包管理器缓存 ─────────────────────────────────────
 
-    local clean_pkg_cache="${CLEAN_PKG_CACHE:-true}"
+    local clean_pkg_cache="${CLEAN_PKG_CACHE:-false}"
 
     if [[ "$clean_pkg_cache" != "true" ]]; then
         log_info "Package cache cleanup disabled (CLEAN_PKG_CACHE=false), skipping"
+    elif ! require_irreversible_cleanup_confirmation; then
+        return 1
     else
         log_info "Cleaning package manager cache..."
         case "$PKG_MGR" in
@@ -240,11 +252,13 @@ EOF
 
     # ── 4. 清理 systemd journal ─────────────────────────────────
 
-    local clean_journal="${CLEAN_JOURNAL:-true}"
+    local clean_journal="${CLEAN_JOURNAL:-false}"
     local journal_max_size="${JOURNAL_MAX_SIZE:-200M}"
 
     if [[ "$clean_journal" != "true" ]]; then
         log_info "Journal cleanup disabled (CLEAN_JOURNAL=false), skipping"
+    elif ! require_irreversible_cleanup_confirmation; then
+        return 1
     elif ! command_exists journalctl 2>/dev/null; then
         log_info "journalctl not found, skipping journal cleanup"
     else
@@ -279,10 +293,12 @@ EOF
 
     # ── 5. 禁用不必要的服务 ─────────────────────────────────────
 
-    local disable_services="${DISABLE_SERVICES:-true}"
+    local disable_services="${DISABLE_SERVICES:-false}"
 
     if [[ "$disable_services" != "true" ]]; then
         log_info "Service disabling skipped (DISABLE_SERVICES=false)"
+    elif ! require_irreversible_cleanup_confirmation; then
+        return 1
     else
         log_info "Disabling unnecessary services..."
 
@@ -322,10 +338,12 @@ EOF
 
     # ── 6. 清理临时文件和旧日志 ─────────────────────────────────
 
-    local clean_temp="${CLEAN_TEMP:-true}"
+    local clean_temp="${CLEAN_TEMP:-false}"
 
     if [[ "$clean_temp" != "true" ]]; then
         log_info "Temp file cleanup disabled (CLEAN_TEMP=false), skipping"
+    elif ! require_irreversible_cleanup_confirmation; then
+        return 1
     else
         log_info "Cleaning temporary files and old logs..."
 

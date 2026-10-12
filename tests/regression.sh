@@ -70,11 +70,26 @@ test_unsafe_install_dir_guard() {
         fail "unsafe install directory rejection"
 }
 
-test_install_default_ref() {
+test_install_requires_pinned_remote_source() {
     local help_out
     help_out=$(bash "$ROOT_DIR/install.sh" --help)
-    echo "$help_out" | grep -Fq '(default: main)' || \
-        fail "install.sh should default to main branch"
+    echo "$help_out" | grep -Fq '40 位不可变 Git commit' || \
+        fail "install.sh help must require an immutable remote commit"
+    echo "$help_out" | grep -Fq 'SHA-256' || \
+        fail "install.sh help must document archive integrity verification"
+}
+
+test_install_rejects_unpinned_remote_source() {
+    local install_input="$SANDBOX_DIR/unpinned-install.sh"
+    {
+        printf '%s\n' '#!/bin/bash'
+        tail -n +2 "$ROOT_DIR/install.sh"
+    } > "$install_input"
+    if sudo bash "$install_input" --install-dir "$SANDBOX_DIR/install-target" >"$SANDBOX_DIR/unpinned-install.out" 2>&1; then
+        fail "remote installer accepted an unpinned source"
+    fi
+    grep -Fq '40 位不可变 Git commit' "$SANDBOX_DIR/unpinned-install.out" || \
+        fail "remote installer did not reject missing immutable commit"
 }
 
 test_tui_engine_load() {
@@ -204,7 +219,7 @@ test_apply_config_defaults_completeness() {
         apply_config_defaults
         for var in $(get_config_var_names); do
             case "$var" in
-                USER_PASSWORD|SSH_PUBKEY|ALLOWED_PORTS|DOCKER_INSECURE_REGISTRIES|DOCKER_REGISTRY_MIRRORS|FAIL2BAN_IGNOREIP|BACKUP_GPG_RECIPIENT|SWAP_SIZE|USER_FULLNAME)
+                SSH_PUBKEY|ALLOWED_PORTS|DOCKER_INSECURE_REGISTRIES|DOCKER_REGISTRY_MIRRORS|FAIL2BAN_IGNOREIP|BACKUP_GPG_RECIPIENT|SWAP_SIZE|USER_FULLNAME)
                     # These can be empty by default
                     ;;
                 *)
@@ -258,16 +273,300 @@ test_fail2ban_install_flag_skip() {
     ) || fail "fail2ban module should skip cleanly when INSTALL_FAIL2BAN=false"
 }
 
+test_firewall_rule_ordering() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/06_firewall.sh
+
+        local ufw_log="$SANDBOX_DIR/ufw.log"
+        ufw() {
+            printf '%s\n' "$*" >> "$ufw_log"
+            case "$1" in
+                status) printf 'Status: active\n' ;;
+                *) return 0 ;;
+            esac
+        }
+        NON_INTERACTIVE=true
+        detect_firewall() { printf 'ufw\n'; }
+        SSH_PORT=2222
+        SSH_KEEP_LEGACY_PORT=true
+        HTTP_PORT=80
+        HTTPS_PORT=443
+        ALLOWED_PORTS=""
+        state_mark() { return 0; }
+        firewall_main
+        local allow_line deny_line
+        allow_line=$(grep -n 'allow 2222/tcp' "$ufw_log" | cut -d: -f1 | head -1)
+        deny_line=$(grep -n 'default deny incoming' "$ufw_log" | cut -d: -f1 | head -1)
+        [ -n "$allow_line" ] && [ -n "$deny_line" ]
+        [ "$allow_line" -lt "$deny_line" ] || fail "UFW must allow SSH before default deny incoming"
+
+        local firewalld_log="$SANDBOX_DIR/firewalld.log"
+        firewall-cmd() {
+            printf '%s\n' "$*" >> "$firewalld_log"
+            case "$1" in
+                --state) printf 'running\n' ;;
+                *) return 0 ;;
+            esac
+        }
+        detect_firewall() { printf 'firewalld\n'; }
+        firewall_main
+        local fwd_allow_line fwd_drop_line
+        fwd_allow_line=$(grep -n -F -- '--zone=drop --add-port=2222/tcp' "$firewalld_log" | cut -d: -f1 | head -1)
+        fwd_drop_line=$(grep -n -F -- '--set-default-zone=drop' "$firewalld_log" | cut -d: -f1 | head -1)
+        [ -n "$fwd_allow_line" ] && [ -n "$fwd_drop_line" ]
+        [ "$fwd_allow_line" -lt "$fwd_drop_line" ] || fail "FirewallD must add SSH port before setting drop zone"
+    ) || fail "firewall rule ordering"
+}
+
+test_dns_timeout_prevalidation() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/03_dns.sh
+        NON_INTERACTIVE=true
+        PRIMARY_DNS=1.1.1.1
+        SECONDARY_DNS=8.8.8.8
+        DNS_LOOKUP_TIMEOUT="0"
+        backup_file() { fail "backup_file should not be called on invalid timeout"; }
+        ! dns_main
+        DNS_LOOKUP_TIMEOUT="-5"
+        ! dns_main
+        DNS_LOOKUP_TIMEOUT="invalid"
+        ! dns_main
+    ) || fail "dns timeout prevalidation"
+}
+
 test_network_security_sysctl_generation() {
     (
         cd "$ROOT_DIR"
         source lib/core.sh
         source lib/common.sh
         source modules/09_network.sh
-        # Verify network_info and prerequisites
-        network_info >/dev/null
-        network_prerequisites
-    ) || fail "network security sysctl module check"
+        local test_dir="$SANDBOX_DIR/network-sysctl"
+        mkdir -p "$test_dir/backups"
+        LOG_FILE="$test_dir/log"
+        AUDIT_LOG="$test_dir/audit"
+        BACKUPS_DIR="$test_dir/backups"
+        BACKUP_REGISTRY="$test_dir/registry"
+        STATE_FILE="$test_dir/state"
+        SYSCTL_CONFIG_FILE="$test_dir/99-vps-network.conf"
+        ENABLE_BBR=false
+        printf 'previous=value\n' > "$SYSCTL_CONFIG_FILE"
+        sysctl() { return 0; }
+        network_main
+        grep -Fxq 'net.ipv4.tcp_fastopen = 3' "$SYSCTL_CONFIG_FILE"
+        grep -Fxq '# Security Hardening - Anti-Spoofing & Anti-DDoS' "$SYSCTL_CONFIG_FILE"
+        printf 'previous=value\n' > "$SYSCTL_CONFIG_FILE"
+        sysctl() { return 1; }
+        ! network_main
+        grep -Fxq 'previous=value' "$SYSCTL_CONFIG_FILE"
+    ) || fail "network sysctl generation and failure rollback"
+}
+
+test_backup_and_rollback_baseline() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        local test_dir="$SANDBOX_DIR/backup-rollback"
+        mkdir -p "$test_dir/backups"
+        LOG_FILE="$test_dir/log"
+        AUDIT_LOG="$test_dir/audit"
+        BACKUPS_DIR="$test_dir/backups"
+        BACKUP_REGISTRY="$test_dir/registry"
+        local source_file="$test_dir/source"
+        printf 'baseline\n' > "$source_file"
+        local first_snapshot second_snapshot
+        first_snapshot="$(backup_file "$source_file")"
+        [ -f "$first_snapshot" ]
+        [ "$(stat -c '%a' "$first_snapshot")" = "600" ]
+        printf 'intermediate\n' > "$source_file"
+        second_snapshot="$(backup_file "$source_file")"
+        [ -f "$second_snapshot" ]
+        printf 'latest\n' > "$source_file"
+        mkdir "$test_dir/directory"
+        printf 'directory-baseline\n' > "$test_dir/directory/item"
+        backup_file "$test_dir/directory" >/dev/null
+        printf 'directory-changed\n' > "$test_dir/directory/item"
+        ln -s target-one "$test_dir/link"
+        backup_file "$test_dir/link" >/dev/null
+        rm "$test_dir/link"
+        ln -s target-two "$test_dir/link"
+        backup_file "$test_dir/created-later" >/dev/null
+        printf 'created\n' > "$test_dir/created-later"
+        rollback_all >/dev/null
+        [ "$(cat "$source_file")" = 'baseline' ]
+        [ "$(cat "$test_dir/directory/item")" = 'directory-baseline' ]
+        [ "$(readlink "$test_dir/link")" = 'target-one' ]
+        [ ! -e "$test_dir/created-later" ]
+    ) || fail "backup must return a private snapshot and rollback to the first baseline"
+}
+
+test_dry_run_has_no_workspace_writes() {
+    local isolated_repo="$SANDBOX_DIR/dry-run"
+    local before_manifest="$SANDBOX_DIR/dry-run-before"
+    local after_manifest="$SANDBOX_DIR/dry-run-after"
+    cp -a "$ROOT_DIR" "$isolated_repo"
+    (
+        cd "$isolated_repo"
+        find . -path './.git' -prune -o -type f -printf '%P:%s:' -exec sha256sum {} \; | sort > "$before_manifest"
+        SKIP_ROOT_CHECK=true ./vps_setup.sh -n -d --modules 00_preflight > "$SANDBOX_DIR/dry-run.out" 2>&1
+        find . -path './.git' -prune -o -type f -printf '%P:%s:' -exec sha256sum {} \; | sort > "$after_manifest"
+    ) || fail "dry-run execution"
+    diff -u "$before_manifest" "$after_manifest" >/dev/null || fail "dry-run wrote to the workspace"
+}
+
+test_irreversible_cleanup_guard() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/13_cleanup.sh
+        LOG_FILE="$SANDBOX_DIR/cleanup.log"
+        unset CLEAN_PKG_CACHE CLEAN_JOURNAL CLEAN_TEMP IRREVERSIBLE_CLEANUP_CONFIRMED
+        apply_config_defaults
+        [ "$CLEAN_PKG_CACHE" = false ]
+        [ "$CLEAN_JOURNAL" = false ]
+        [ "$CLEAN_TEMP" = false ]
+        ! require_irreversible_cleanup_confirmation
+        IRREVERSIBLE_CLEANUP_CONFIRMED=true
+        require_irreversible_cleanup_confirmation
+    ) || fail "irreversible cleanup requires explicit confirmation"
+}
+
+test_docker_repository_key_verification() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source modules/08_docker.sh
+        [ "$DOCKER_GPG_FINGERPRINT" = '9DC858229FC7DD38854AE2D88D81803C0EBFCD88' ]
+        local test_dir="$SANDBOX_DIR/docker-key"
+        local key_dir="$test_dir/keyrings"
+        local source_file="$test_dir/sources/docker.list"
+        LOG_FILE="$test_dir/log"
+        detect_os_id() { printf 'debian\n'; }
+        lsb_release() { printf 'bookworm\n'; }
+        dpkg() { printf 'amd64\n'; }
+        curl() {
+            local output
+            while [ "$#" -gt 0 ]; do
+                if [ "$1" = '-o' ]; then
+                    output="$2"
+                    shift 2
+                else
+                    shift
+                fi
+            done
+            printf 'key-data\n' > "$output"
+        }
+        gpg() {
+            if [[ " $* " == *' --show-keys '* ]]; then
+                printf 'fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:\n'
+            else
+                local output=""
+                while [ "$#" -gt 0 ]; do
+                    if [ "$1" = '--output' ]; then
+                        output="$2"
+                        shift 2
+                    else
+                        shift
+                    fi
+                done
+                printf 'dearmored\n' > "$output"
+            fi
+        }
+        apt_update() { return 0; }
+        DOCKER_APT_KEYRING_DIR="$key_dir" DOCKER_APT_KEY_FILE="$key_dir/docker.gpg" \
+            DOCKER_APT_SOURCE_FILE="$source_file" docker_configure_apt_repository
+        test -s "$key_dir/docker.gpg"
+        grep -Fqx "deb [arch=amd64 signed-by=$key_dir/docker.gpg] https://download.docker.com/linux/debian bookworm stable" "$source_file"
+        rm -f "$key_dir/docker.gpg" "$source_file"
+        gpg() { printf 'fpr:::::::::BADFINGERPRINT:\n'; }
+        ! DOCKER_APT_KEYRING_DIR="$key_dir" DOCKER_APT_KEY_FILE="$key_dir/docker.gpg" \
+            DOCKER_APT_SOURCE_FILE="$source_file" docker_configure_apt_repository
+        test ! -e "$key_dir/docker.gpg"
+        test ! -e "$source_file"
+    ) || fail "Docker repository key verification"
+}
+
+test_account_security_baseline() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/12_security.sh
+        local test_dir="$SANDBOX_DIR/account-baseline"
+        mkdir -p "$test_dir/backups"
+        LOG_FILE="$test_dir/log"
+        AUDIT_LOG="$test_dir/audit"
+        BACKUPS_DIR="$test_dir/backups"
+        BACKUP_REGISTRY="$test_dir/registry"
+        LOGIN_DEFS_FILE="$test_dir/login.defs"
+        PWQUALITY_CONF_FILE="$test_dir/pwquality.conf"
+        printf '%s\n' '# system defaults' 'PASS_MAX_DAYS 99999' 'UMASK 022' > "$LOGIN_DEFS_FILE"
+        printf '%s\n' '# quality defaults' 'minlen = 8' 'retry = 1' > "$PWQUALITY_CONF_FILE"
+        PASS_MAX_DAYS=365
+        PASS_MIN_DAYS=1
+        PASS_WARN_AGE=7
+        DEFAULT_UMASK=027
+        PWQUALITY_MINLEN=14
+        PWQUALITY_MINCLASS=4
+        PWQUALITY_RETRY=3
+        security_apply_account_baseline
+        grep -Fxq 'PASS_MAX_DAYS 365' "$LOGIN_DEFS_FILE"
+        grep -Fxq 'PASS_MIN_DAYS 1' "$LOGIN_DEFS_FILE"
+        grep -Fxq 'PASS_WARN_AGE 7' "$LOGIN_DEFS_FILE"
+        grep -Fxq 'UMASK 027' "$LOGIN_DEFS_FILE"
+        grep -Fxq 'minlen = 14' "$PWQUALITY_CONF_FILE"
+        grep -Fxq 'minclass = 4' "$PWQUALITY_CONF_FILE"
+        grep -Fxq 'retry = 3' "$PWQUALITY_CONF_FILE"
+        cp "$LOGIN_DEFS_FILE" "$test_dir/login.expected"
+        PWQUALITY_MINLEN=11
+        ! security_apply_account_baseline
+        cmp -s "$LOGIN_DEFS_FILE" "$test_dir/login.expected"
+
+        # Missing pwquality.conf triggers package install attempt
+        rm -f "$PWQUALITY_CONF_FILE"
+        local called_install=false
+        install_pkg() {
+            called_install=true
+            [ "$1" = "libpam-pwquality" ] || return 1
+            printf '%s\n' 'minlen = 9' > "$PWQUALITY_CONF_FILE"
+        }
+        PKG_MGR="apt"
+        PWQUALITY_MINLEN=14
+        security_apply_account_baseline
+        [ "$called_install" = true ]
+        grep -Fxq 'minlen = 14' "$PWQUALITY_CONF_FILE"
+    ) || fail "account security baseline"
+}
+
+test_sudo_nopasswd_rejected_before_user_changes() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/04_user.sh
+        LOG_FILE="$SANDBOX_DIR/sudo-policy.log"
+        USERNAME=policytest
+        SUDO_NOPASSWD=true
+        id() {
+            if [ "${1:-}" = '-u' ]; then
+                printf '0\n'
+                return 0
+            fi
+            return 1
+        }
+        useradd() {
+            touch "$SANDBOX_DIR/useradd-called"
+            return 0
+        }
+        ! user_main
+        test ! -e "$SANDBOX_DIR/useradd-called"
+    ) || fail "SUDO_NOPASSWD rejection must precede user creation"
 }
 
 test_i18n_variable_interpolation() {
@@ -305,6 +604,18 @@ test_rollback_cli_guard() {
     local output
     output=$(SKIP_ROOT_CHECK=true "$isolated_repo/vps_setup.sh" -n -a --rollback 2>&1)
     echo "$output" | grep -Fq "无可回滚的文件" || fail "rollback without registry should report no files"
+
+    # Test rollback when a valid registry exists
+    local trans_dir="$isolated_repo/backups/transactions/test_trans"
+    mkdir -p "$trans_dir"
+    local target_file="$SANDBOX_DIR/rollback_target.txt"
+    local snap_file="$trans_dir/target.snap"
+    printf 'original-content\n' > "$snap_file"
+    printf 'modified-content\n' > "$target_file"
+    printf '%s|%s|file|644|\n' "$target_file" "$snap_file" > "$trans_dir/registry.tsv"
+    output=$(SKIP_ROOT_CHECK=true "$isolated_repo/vps_setup.sh" -n -a --rollback 2>&1)
+    echo "$output" | grep -Fq "受跟踪的配置文件已恢复" || fail "rollback with registry should succeed"
+    [ "$(cat "$target_file")" = "original-content" ] || fail "target file not restored properly"
 }
 
 test_health_report_cli() {
@@ -343,7 +654,8 @@ test_ssh_legacy_port_and_pubkey_configuration() {
     cp -a "$ROOT_DIR" "$isolated_repo"
     local config_file="$isolated_repo/config/vps_config.conf"
 
-    # Test that SSH_KEEP_LEGACY_PORT=false is preserved and parsed properly
+    # A production port migration must retain the old port even when a legacy
+    # configuration requests its removal; closing it needs a separate change.
     (
         cd "$isolated_repo"
         source lib/core.sh
@@ -362,11 +674,19 @@ test_ssh_legacy_port_and_pubkey_configuration() {
         [ "$SSH_PUBKEY_AUTHENTICATION" = "yes" ]
         [ "$SSH_PUBKEY" = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey user@workstation" ]
 
-        # Test review card output reflects the new port policy and pubkey
+        # The review card clarifies that production policy forces preservation of legacy ports,
+        # while the migration policy always keeps the old listening port before any SSH files are edited.
         local card_out
         card_out=$(print_review_card 13)
-        echo "$card_out" | grep -Fq "彻底关闭旧端口 22" || fail "review card should show closed legacy port"
+        echo "$card_out" | grep -Fq "生产保护强制保留" || fail "review card should show production legacy port protection"
         echo "$card_out" | grep -Fq "ssh-ed25519 user@workstation" || fail "review card should show pubkey summary"
+
+        source modules/05_ssh.sh
+        local resolved_ports
+        ssh_resolve_migration_ports resolved_ports "22" "24822" false
+        [ "$resolved_ports" = "22 24822" ] || fail "SSH migration must preserve the legacy port"
+        ssh_resolve_migration_ports resolved_ports "22 24822" "24822" true
+        [ "$resolved_ports" = "22 24822" ] || fail "SSH migration must not duplicate an existing target port"
 
         # Test i18n translation for new keys
         set_ui_language en
@@ -380,7 +700,8 @@ test_user_password_configuration_and_cli() {
     cp -a "$ROOT_DIR" "$isolated_repo"
     local config_file="$isolated_repo/config/vps_config.conf"
 
-    # 1. Test saving and loading USER_PASSWORD
+    # 1. Reject passwords from persistent configuration and accept only the
+    # one-time environment variable.
     (
         cd "$isolated_repo"
         source lib/core.sh
@@ -389,13 +710,20 @@ test_user_password_configuration_and_cli() {
             'USERNAME=testadm' \
             'USER_PASSWORD=SecretPassword123' > "$config_file"
         chmod 600 "$config_file"
-        load_config "$config_file"
-        [ "$USERNAME" = "testadm" ]
-        [ "$USER_PASSWORD" = "SecretPassword123" ]
+        if load_config "$config_file"; then
+            fail "USER_PASSWORD in configuration must be rejected"
+        fi
+        [ -z "${USER_PASSWORD:-}" ]
 
-        # Test save_config preserves USER_PASSWORD
+        USERNAME=testadm
+        VPS_SETUP_USER_PASSWORD=SecretPassword123
+        apply_config_defaults
+        [ "$USER_PASSWORD" = "SecretPassword123" ]
+        # The password must live only in this shell, never inherited by child processes.
+        [ "$(python3 -c 'import os; print(os.environ.get("USER_PASSWORD", ""))')" = "" ] || \
+            fail "USER_PASSWORD leaked into child processes"
         save_config "$config_file" $(get_config_var_names)
-        grep -q '^USER_PASSWORD=SecretPassword123$' "$config_file" || fail "USER_PASSWORD not saved to config"
+        ! grep -q '^USER_PASSWORD=' "$config_file" || fail "USER_PASSWORD must not be saved to config"
 
         # Test review card displays password status
         PASSWORD_AUTH=no
@@ -414,6 +742,15 @@ test_user_password_configuration_and_cli() {
     if "$isolated_repo/vps_setup.sh" -n --set-password testadm >"$SANDBOX_DIR/pwd_err.out" 2>&1; then
         fail "--set-password should fail when no password is provided in non-interactive mode"
     fi
+
+    # 4. A password for an account that does not exist must not be staged in
+    # configuration now that persistent password storage is forbidden.
+    if SKIP_ROOT_CHECK=true VPS_SETUP_USER_PASSWORD=SecretPassword123 \
+        "$isolated_repo/vps_setup.sh" -n --set-password notcreated >"$SANDBOX_DIR/pwd_missing_user.out" 2>&1; then
+        fail "--set-password must reject a non-existent user"
+    fi
+    grep -Fq '不会持久化密码' "$SANDBOX_DIR/pwd_missing_user.out" || \
+        fail "missing-user password rejection message"
 }
 
 test_safe_config_parser
@@ -436,7 +773,15 @@ test_ssh_legacy_port_and_pubkey_configuration
 test_user_password_configuration_and_cli
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
+test_firewall_rule_ordering
+test_dns_timeout_prevalidation
 test_network_security_sysctl_generation
+test_backup_and_rollback_baseline
+test_dry_run_has_no_workspace_writes
+test_irreversible_cleanup_guard
+test_docker_repository_key_verification
+test_account_security_baseline
+test_sudo_nopasswd_rejected_before_user_changes
 test_unsafe_install_dir_guard
-test_install_default_ref
+test_install_requires_pinned_remote_source
 printf 'Regression checks passed.\n'

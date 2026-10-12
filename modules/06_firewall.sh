@@ -119,17 +119,17 @@ firewall_main() {
     
     case "$firewall_type" in
         ufw)
-            if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+            if LC_ALL=C ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
                 # Check if our essential ports are allowed
                     ssh_ports_allowed=true
                     for configured_ssh_port in $ssh_ports; do
-                        if ! ufw status | awk -v port="$configured_ssh_port/tcp" '$1 == port && $2 == "ALLOW" {found=1} END {exit !found}'; then
+                        if ! LC_ALL=C ufw status | awk -v port="$configured_ssh_port/tcp" '$1 == port && $2 == "ALLOW" {found=1} END {exit !found}'; then
                             ssh_ports_allowed=false
                         fi
                     done
                     if [ "$ssh_ports_allowed" = "true" ] && \
-                   ufw status | grep -q "$http_port/tcp.*ALLOW" && \
-                   ufw status | grep -q "$https_port/tcp.*ALLOW"; then
+                   LC_ALL=C ufw status | grep -q "$http_port/tcp.*ALLOW" && \
+                   LC_ALL=C ufw status | grep -q "$https_port/tcp.*ALLOW"; then
                     already_configured=true
                 fi
             fi
@@ -221,7 +221,7 @@ firewall_main() {
         ufw)
             log_info "Configuring UFW firewall..."
             local ufw_was_active=false
-            if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+            if LC_ALL=C ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
                 ufw_was_active=true
             fi
             
@@ -234,14 +234,12 @@ firewall_main() {
                 fi
             fi
             
-            # Set default policies
-            ufw default deny incoming
-            ufw default allow outgoing
-            
-            # Allow every active SSH listener during port migration.
+            # Establish the SSH recovery path before restricting inbound traffic.
             for configured_ssh_port in $ssh_ports; do
-                ufw allow "$configured_ssh_port"/tcp comment 'SSH'
+                ufw allow "$configured_ssh_port"/tcp comment 'SSH' || return 1
             done
+            ufw default deny incoming || return 1
+            ufw default allow outgoing || return 1
             ufw allow "$http_port"/tcp comment 'HTTP'
             ufw allow "$https_port"/tcp comment 'HTTPS'
             
@@ -272,7 +270,7 @@ firewall_main() {
             fi
             
             # Verify status
-            if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+            if LC_ALL=C ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
                 log_info "UFW enabled and configured successfully"
                 changes_made=true
                 audit "FIREWALL_CONFIGURED" "type=ufw ssh_port=$ssh_port http=$http_port https=$https_port"
@@ -297,18 +295,18 @@ firewall_main() {
             # Start and enable firewalld
             systemctl enable --now firewalld 2>/dev/null || true
             
-            # Set default zone to drop (most secure)
-            firewall-cmd --set-default-zone=drop
-            
+            # Add runtime and persistent SSH recovery rules before using drop.
+            for configured_ssh_port in $ssh_ports; do
+                firewall-cmd --zone=drop --add-port="$configured_ssh_port"/tcp || return 1
+                firewall-cmd --permanent --zone=drop --add-port="$configured_ssh_port"/tcp || return 1
+            done
+            firewall-cmd --set-default-zone=drop || return 1
+
             # Configure the default zone
             firewall-cmd --permanent --zone=drop --add-service=dhcpv6-client
             firewall-cmd --permanent --zone=drop --add-source=127.0.0.1/8
             firewall-cmd --permanent --zone=drop --add-source=::1/128
             
-            # Add every active SSH listener during port migration.
-            for configured_ssh_port in $ssh_ports; do
-                firewall-cmd --permanent --zone=drop --add-port="$configured_ssh_port"/tcp
-            done
             firewall-cmd --permanent --zone=drop --add-port="$http_port"/tcp
             firewall-cmd --permanent --zone=drop --add-port="$https_port"/tcp
             

@@ -8,6 +8,7 @@ TIMEZONE 'System timezone (e.g., Asia/Shanghai)'
 LOCALE 'System locale (e.g., zh_CN.UTF-8)'
 PRIMARY_DNS 'Primary DNS server (e.g., 1.1.1.1)'
 SECONDARY_DNS 'Secondary DNS server (e.g., 8.8.8.8)'
+DNS_LOOKUP_TIMEOUT 'DNS lookup timeout in seconds'
 SSH_PORT 'SSH port number'
 SSH_KEEP_LEGACY_PORT 'Keep the previous SSH port open during migration (true/false)'
 PERMIT_ROOT_LOGIN 'Allow root login via SSH (yes/no)'
@@ -15,7 +16,6 @@ PASSWORD_AUTH 'Allow password authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTHENTICATION 'Allow public key authentication via SSH (yes/no)'
 SSH_PUBKEY_AUTH 'Whether SSH public key auth was chosen in wizard (yes/no)'
 SSH_PUBKEY 'Optional SSH public key content'
-USER_PASSWORD 'User password for system and login authentication'
 USER_FULLNAME 'Full name for the non-root user'
 USER_SHELL 'Login shell for the non-root user'
 CREATE_HOME 'Whether to create the user home directory (true/false)'
@@ -52,6 +52,14 @@ FAIL2BAN_FINDTIME 'Find time window in seconds for Fail2ban'
 FAIL2BAN_MAXRETRY 'Maximum retry attempts before Fail2ban ban'
 INSTALL_AUDITD 'Whether to install auditd (true/false)'
 ENABLE_SELINUX_CHECK 'Whether to check SELinux/AppArmor (true/false)'
+ENFORCE_ACCOUNT_SECURITY_BASELINE 'Whether to enforce password aging, umask, and pwquality baseline (true/false)'
+PASS_MAX_DAYS 'Maximum password age in days'
+PASS_MIN_DAYS 'Minimum password age in days'
+PASS_WARN_AGE 'Password expiry warning period in days'
+DEFAULT_UMASK 'Default account umask (for example, 027)'
+PWQUALITY_MINLEN 'Minimum password length'
+PWQUALITY_MINCLASS 'Minimum password character classes'
+PWQUALITY_RETRY 'Maximum password quality retries'
 ENABLE_BACKUP 'Whether to enable backup system (true/false)'
 BACKUP_SCHEDULE 'Five-field cron schedule for backups'
 BACKUP_DIRECTORIES 'Space-separated absolute backup source directories'
@@ -77,6 +85,7 @@ CLEAN_JOURNAL 'Whether to clean journal logs (true/false)'
 JOURNAL_MAX_SIZE 'Maximum journal storage size (e.g., 200M)'
 DISABLE_SERVICES 'Whether to disable unused services (true/false)'
 CLEAN_TEMP 'Whether to clean temporary files (true/false)'
+IRREVERSIBLE_CLEANUP_CONFIRMED 'Explicit confirmation for destructive cleanup actions (true/false)'
 OPTIMIZE_FSTAB 'Whether to review filesystem optimizations (true/false)'
 "
 
@@ -91,6 +100,7 @@ load_config() {
     local config_var_names config_owner config_mode key value line
     local loaded_count=0
     HOSTNAME_FROM_CONFIG="${HOSTNAME_FROM_CONFIG:-false}"
+    unset USER_PASSWORD
 
     # Configuration is data, not shell code. Do not source this file: it can be
     # preserved across root-run updates and must never execute commands.
@@ -126,6 +136,10 @@ load_config() {
             fi
             key="${BASH_REMATCH[1]}"
             value="${BASH_REMATCH[2]}"
+            if [ "$key" = "USER_PASSWORD" ]; then
+                log_error "USER_PASSWORD is forbidden in configuration files; use VPS_SETUP_USER_PASSWORD for one-time input"
+                return 1
+            fi
             # Support the legacy %q form used by releases before v2.1 for
             # space-containing data such as SSH public keys. This is decoding,
             # never evaluation.
@@ -158,6 +172,9 @@ load_config() {
             log_debug "Overrode $var with environment variable $env_var"
         fi
     done
+    if [ -n "${VPS_SETUP_USER_PASSWORD:-}" ]; then
+        USER_PASSWORD="$VPS_SETUP_USER_PASSWORD"
+    fi
     export HOSTNAME_FROM_CONFIG
 }
 
@@ -297,6 +314,7 @@ validate_hostname() {
 
 # Apply configuration values to variables with defaults
 apply_config_defaults() {
+    unset USER_PASSWORD
     # Apply VPS_SETUP_* environment variable overrides first
     local var env_var
     for var in $(get_config_var_names); do
@@ -308,10 +326,12 @@ apply_config_defaults() {
             fi
         fi
     done
+    if [ -n "${VPS_SETUP_USER_PASSWORD:-}" ]; then
+        USER_PASSWORD="$VPS_SETUP_USER_PASSWORD"
+    fi
 
     # Set defaults for variables that don't have values yet
     : "${USERNAME:=appadmin}"
-    : "${USER_PASSWORD:=}"
     : "${USER_FULLNAME:=}"
     : "${USER_SHELL:=/bin/bash}"
     : "${CREATE_HOME:=true}"
@@ -323,6 +343,7 @@ apply_config_defaults() {
     : "${LOCALE:=zh_CN.UTF-8}"
     : "${PRIMARY_DNS:=1.1.1.1}"
     : "${SECONDARY_DNS:=8.8.8.8}"
+    : "${DNS_LOOKUP_TIMEOUT:=10}"
     : "${SSH_PORT:=24822}"
     : "${SSH_KEEP_LEGACY_PORT:=true}"
     : "${PERMIT_ROOT_LOGIN:=no}"
@@ -359,6 +380,14 @@ apply_config_defaults() {
     : "${FAIL2BAN_MAXRETRY:=3}"
     : "${INSTALL_AUDITD:=false}"
     : "${ENABLE_SELINUX_CHECK:=true}"
+    : "${ENFORCE_ACCOUNT_SECURITY_BASELINE:=true}"
+    : "${PASS_MAX_DAYS:=365}"
+    : "${PASS_MIN_DAYS:=1}"
+    : "${PASS_WARN_AGE:=7}"
+    : "${DEFAULT_UMASK:=027}"
+    : "${PWQUALITY_MINLEN:=14}"
+    : "${PWQUALITY_MINCLASS:=4}"
+    : "${PWQUALITY_RETRY:=3}"
     : "${ENABLE_BBR:=true}"
     : "${ENABLE_BACKUP:=false}"
     : "${BACKUP_SCHEDULE:=0 2 * * *}"
@@ -380,10 +409,11 @@ apply_config_defaults() {
     : "${SWAPPINESS:=10}"
     : "${VFS_CACHE_PRESSURE:=50}"
     : "${REMOVE_SNAP:=false}"
-    : "${CLEAN_PKG_CACHE:=true}"
-    : "${CLEAN_JOURNAL:=true}"
+    : "${CLEAN_PKG_CACHE:=false}"
+    : "${CLEAN_JOURNAL:=false}"
     : "${JOURNAL_MAX_SIZE:=200M}"
     : "${DISABLE_SERVICES:=false}"
-    : "${CLEAN_TEMP:=true}"
+    : "${CLEAN_TEMP:=false}"
+    : "${IRREVERSIBLE_CLEANUP_CONFIRMED:=false}"
     : "${OPTIMIZE_FSTAB:=true}"
 }

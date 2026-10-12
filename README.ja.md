@@ -9,15 +9,38 @@ Linux VPS 向けの初期化・セキュリティ強化スクリプトです。�
 
 ## はじめに
 
-新しい VPS で `root` または `sudo` で実行します：
+### クイックスタート (推奨)
+
+新しい Linux VPS 上で `root` または `sudo` 権限で実行します：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+# 1. リポジトリをクローン
+git clone https://github.com/destiny199511/vps-init-setup.git
+cd vps-init-setup
+
+# 2. インタラクティブセットアップウィザードを起動
+sudo ./vps_setup.sh
 ```
 
-インストーラーはプロジェクトを `/opt/vps-init-setup` に配置し、その後インタラクティブなメインメニューを起動します。
+### 本番環境向け安全インストール (Release 署名とハッシュ検証)
 
-> SSH ポートやファイアウォールを変更する前に、現在のセッションは開いたままにしてください。実行完了後、新しいターミナルで SSH ログインを確認してから、古いセッションを閉じてください。
+本番環境では、公開された不変の Git commit および独立した SHA-256 チェックサムによるインストールを推奨します：
+
+```bash
+export VPS_COMMIT="<40-hex-commit>"
+export ARCHIVE_SHA256="<release-archive-sha256>"
+export INSTALLER_SHA256="<release-installer-sha256>"
+
+# インストーラーをダウンロードして検証
+curl -fsSLo install.sh "https://raw.githubusercontent.com/destiny199511/vps-init-setup/${VPS_COMMIT}/install.sh"
+printf '%s  %s\n' "$INSTALLER_SHA256" install.sh | sha256sum -c -
+
+# ソースアーカイブを検証して /opt/vps-init-setup にインストール
+sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256"
+```
+
+> 💡 **Release 検証**: 各 Release には `source-commit.txt`、SHA-256 マニフェスト、および GitHub ビルド出所証明書（`gh attestation verify` で検証可能）が付属します。
+> ⚠️ **締め出し防止の注意**: SSH ポートやファイアウォールを変更する前に、現在のセッションを開いたままにしてください。完了後、新しいターミナルでログインを確認してから古いセッションを切断してください。
 
 ## 設定方法
 
@@ -121,6 +144,33 @@ tail -f logs/vps_setup_*.log
 ```bash
 sudo ./vps_setup.sh --help
 ```
+
+## 更新とファイルの場所
+
+更新でも同じ固定 commit と、独立して検証済みの SHA-256 値を使用します：
+
+```bash
+sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256" --update-only
+```
+
+`install.sh` の主なオプション：
+- `--ref <40-hex-commit>`：不変の 40 文字 Git commit を指定（リモートインストールで必須）。
+- `--sha256 <hash>`：その commit のソースアーカイブに対する SHA-256（リモートインストールで必須）。
+- `--update-only`：設定ウィザードを起動せずにスクリプトファイルを更新。
+
+更新時には `config/`、`logs/`、`backups/` が保持されます。主要なファイル：
+
+- 設定：`config/vps_config.conf`
+- 実行結果：`config/install-result.env`
+- 実行ログ：`logs/vps_setup_*.log`
+- セキュリティ監査ログ：`logs/audit_*.log`
+- 自動バックアップと設定スナップショット：`backups/`
+
+> `--rollback` は最新トランザクションで変更された追跡対象システム設定ファイルの自動復元に対応しています。システムユーザーアカウントやパッケージは `backups/` スナップショットと監査ログを参照して復元できます。
+
+## トラブルシューティングと検証
+
+- **本番インストールと改ざん防止**: 可変ブランチと検証の省略はサポートされません。独立して検証したリリース記録から commit と 2 つの SHA-256 を取得し、文書上部の検証手順に従ってください。
 
 ## 互換性
 

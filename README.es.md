@@ -9,15 +9,38 @@ Un script de inicialización y refuerzo de seguridad para VPS Linux. Configura u
 
 ## Primeros Pasos
 
-Ejecuta como `root` o con `sudo` en un VPS nuevo:
+### Inicio Rápido (Recomendado)
+
+Ejecuta como `root` o con `sudo` en un VPS Linux nuevo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/destiny199511/vps-init-setup/main/install.sh | sudo bash
+# 1. Clonar el repositorio
+git clone https://github.com/destiny199511/vps-init-setup.git
+cd vps-init-setup
+
+# 2. Iniciar el asistente interactivo
+sudo ./vps_setup.sh
 ```
 
-El instalador coloca el proyecto en `/opt/vps-init-setup` y luego inicia el menú principal interactivo.
+### Instalación Segura para Producción (Verificación de Release)
 
-> Antes de cambiar el puerto SSH o el firewall, mantén abierta tu sesión actual. Después de que termine la ejecución, verifica el inicio de sesión SSH desde una nueva terminal antes de cerrar la antigua.
+Para entornos de producción, instala usando un commit Git inmutable y sumas de verificación SHA-256 independientes:
+
+```bash
+export VPS_COMMIT="<40-hex-commit>"
+export ARCHIVE_SHA256="<release-archive-sha256>"
+export INSTALLER_SHA256="<release-installer-sha256>"
+
+# Descargar y verificar el instalador
+curl -fsSLo install.sh "https://raw.githubusercontent.com/destiny199511/vps-init-setup/${VPS_COMMIT}/install.sh"
+printf '%s  %s\n' "$INSTALLER_SHA256" install.sh | sha256sum -c -
+
+# Verificar archivo fuente e instalar en /opt/vps-init-setup
+sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256"
+```
+
+> 💡 **Verificación de Release**: Cada Release incluye `source-commit.txt`, manifiestos SHA-256 y atestados de procedencia de GitHub (verificables mediante `gh attestation verify`).
+> ⚠️ **Prevención de Bloqueo**: Mantén abierta tu sesión SSH actual antes de cambiar puertos o reglas del firewall. Comprueba la conexión en una nueva terminal antes de desconectar.
 
 ## Configuración
 
@@ -121,6 +144,33 @@ Para la lista completa de opciones, ejecuta:
 ```bash
 sudo ./vps_setup.sh --help
 ```
+
+## Actualizaciones y Ubicación de Archivos
+
+Las actualizaciones usan el mismo commit fijado y los SHA-256 verificados de forma independiente:
+
+```bash
+sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256" --update-only
+```
+
+Parámetros comunes de `install.sh`:
+- `--ref <commit-hex-de-40>`: Especifica un commit Git inmutable de 40 caracteres (obligatorio para instalaciones remotas).
+- `--sha256 <hash>`: SHA-256 esperado del archivo fuente de ese commit (obligatorio para instalaciones remotas).
+- `--update-only`: Actualiza los archivos sin iniciar el asistente de configuración.
+
+Las actualizaciones conservan `config/`, `logs/` y `backups/`. Archivos clave:
+
+- Configuración: `config/vps_config.conf`
+- Resultados de ejecución: `config/install-result.env`
+- Registros de ejecución: `logs/vps_setup_*.log`
+- Registros de auditoría de seguridad: `logs/audit_*.log`
+- Copias de seguridad automáticas e instantáneas de configuración: `backups/`
+
+> `--rollback` permite restaurar automáticamente los archivos de configuración del sistema modificados; las cuentas de usuario y paquetes se pueden gestionar con los snapshots en `backups/` y los registros de auditoría.
+
+## Solución de Problemas y Verificación
+
+- **Instalacion de produccion y prevencion de manipulacion**: Las ramas mutables y la omision de verificacion no estan permitidas. Obtenga el commit y ambos SHA-256 de un registro de release verificado de forma independiente y siga el flujo de verificacion inicial.
 
 ## Compatibilidad
 

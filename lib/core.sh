@@ -26,8 +26,10 @@ if [ -f "${SCRIPT_ROOT}/lib/i18n.sh" ]; then
     source "${SCRIPT_ROOT}/lib/i18n.sh"
 fi
 
-# 确保核心目录存在
-mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}" 2>/dev/null || true
+# 确保核心目录存在且权限受限 (0700)。dry-run 不得创建目录或文件。
+if [ "${DRY_RUN:-false}" != "true" ]; then
+    ( umask 077 && mkdir -p "${CONFIG_DIR}" "${PROFILES_DIR}" "${LOGS_DIR}" "${BACKUPS_DIR}" ) 2>/dev/null || true
+fi
 
 # --- 日志文件 ---
 SESSION_ID="$(date +%Y%m%d_%H%M%S)"
@@ -57,11 +59,17 @@ log() {
     local level="$1"; shift
     local msg="$*"
     local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
-    echo "[${timestamp}] [${level}] ${msg}" >> "${LOG_FILE}" 2>/dev/null || true
+    if [ "${DRY_RUN:-false}" != "true" ]; then
+        (
+            umask 077
+            [ -f "${LOG_FILE}" ] || { touch "${LOG_FILE}" 2>/dev/null && chmod 600 "${LOG_FILE}" 2>/dev/null || true; }
+            echo "[${timestamp}] [${level}] ${msg}" >> "${LOG_FILE}" 2>/dev/null || true
+        )
+    fi
 }
 
 log_info()  { log "INFO" "$*"; echo -e "${GREEN}[INFO]${NC} $*"; }
-log_warn()  { log "WARN" "$*"; echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_warn()  { log "WARN" "$*"; echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 log_error() { log "ERROR" "$*"; echo -e "${RED}[ERROR]${NC} $*" >&2; }
 log_debug() {
     log "DEBUG" "$*"
@@ -75,7 +83,13 @@ log_ok()    { log "OK" "$*"; echo -e "${GREEN}[OK]${NC} $*"; }
 audit() {
     local action_code="$1"; shift
     local detail="$*"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') | ${action_code} | ${detail}" >> "${AUDIT_LOG}" 2>/dev/null || true
+    if [ "${DRY_RUN:-false}" != "true" ]; then
+        (
+            umask 077
+            [ -f "${AUDIT_LOG}" ] || { touch "${AUDIT_LOG}" 2>/dev/null && chmod 600 "${AUDIT_LOG}" 2>/dev/null || true; }
+            echo "$(date '+%Y-%m-%d %H:%M:%S') | ${action_code} | ${detail}" >> "${AUDIT_LOG}" 2>/dev/null || true
+        )
+    fi
 }
 
 #===============================================================================
@@ -196,7 +210,7 @@ detect_firewall() {
     # when UFW is the intended host firewall, so never treat Docker-only chains
     # as a standalone iptables/nftables configuration.
     if command -v ufw >/dev/null 2>&1; then
-        if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+        if LC_ALL=C ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
             printf '%s\n' "ufw"
             return 0
         fi
@@ -404,18 +418,133 @@ service_restart() {
 #===============================================================================
 
 BACKUP_REGISTRY="${BACKUPS_DIR}/registry.txt"
+TRANSACTION_ID=""
+TRANSACTION_DIR=""
+TRANSACTION_ACTIVE=false
 
-# backup_file: 备份文件
-backup_file() {
-    local src="$1"
-    if [[ ! -f "${src}" ]]; then
+transaction_start() {
+    if [ "${DRY_RUN:-false}" = "true" ]; then
         return 0
     fi
-    local ts="$(date +%Y%m%d_%H%M%S)"
-    local dest="${BACKUPS_DIR}/$(echo "${src}" | tr '/' '_')_${ts}"
-    cp -a "${src}" "${dest}"
-    echo "${src}|${dest}" >> "${BACKUP_REGISTRY}"
-    log_debug "$(t '已备份: ${src} → ${dest}')"
+    if [ "${TRANSACTION_ACTIVE}" = "true" ]; then
+        return 0
+    fi
+    TRANSACTION_ID="${VPS_SETUP_TRANSACTION_ID:-$(date +%Y%m%d_%H%M%S)-$$}"
+    if [[ ! "$TRANSACTION_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        log_error "Invalid transaction identifier"
+        return 1
+    fi
+    TRANSACTION_DIR="${BACKUPS_DIR}/transactions/${TRANSACTION_ID}"
+    ( umask 077 && mkdir -p "$TRANSACTION_DIR" ) || return 1
+    BACKUP_REGISTRY="${TRANSACTION_DIR}/registry.tsv"
+    : > "$BACKUP_REGISTRY" || return 1
+    chmod 600 "$BACKUP_REGISTRY" || return 1
+    printf 'status=in-progress\ntransaction_id=%s\nstarted_at=%s\n' "$TRANSACTION_ID" "$(date -Is)" \
+        > "${TRANSACTION_DIR}/status.env" || return 1
+    chmod 600 "${TRANSACTION_DIR}/status.env" || return 1
+    TRANSACTION_ACTIVE=true
+    audit "TRANSACTION_START" "id=$TRANSACTION_ID"
+    return 0
+}
+
+transaction_finish() {
+    local status="$1"
+    [ -n "${TRANSACTION_DIR:-}" ] || return 0
+    printf 'status=%s\ntransaction_id=%s\nfinished_at=%s\n' "$status" "$TRANSACTION_ID" "$(date -Is)" \
+        > "${TRANSACTION_DIR}/status.env" || return 1
+    chmod 600 "${TRANSACTION_DIR}/status.env" || return 1
+    TRANSACTION_ACTIVE=false
+    audit "TRANSACTION_FINISH" "id=$TRANSACTION_ID status=$status"
+}
+
+find_latest_transaction_registry() {
+    local registry
+    registry="$(find "${BACKUPS_DIR}/transactions" -mindepth 2 -maxdepth 2 -type f -name registry.tsv -printf '%T@ %p\n' 2>/dev/null | \
+        sort -nr | awk 'NR == 1 {print $2}')"
+    [ -n "$registry" ] && printf '%s\n' "$registry"
+}
+
+backup_record_for() {
+    local src="$1"
+    [ -f "${BACKUP_REGISTRY}" ] || return 1
+    awk -F'|' -v source="$src" '$1 == source {print; exit}' "${BACKUP_REGISTRY}"
+}
+
+apply_backup_metadata() {
+    local target="$1"
+    local mode="$2"
+    local owner="$3"
+    local group="$4"
+
+    [ -n "$mode" ] && chmod "$mode" "$target" 2>/dev/null || true
+    if [ -n "$owner" ] && [ -n "$group" ]; then
+        chown "$owner:$group" "$target" 2>/dev/null || true
+    fi
+}
+
+# backup_file: Captures each tracked path's first pre-change state for the
+# current transaction. stdout remains a snapshot path for existing paths so
+# existing module-local compensators remain compatible.
+backup_file() {
+    local src="$1"
+    local record kind snapshot mode owner group source_parent snapshot_template
+
+    [ -n "$src" ] || return 1
+    mkdir -p "$(dirname "$BACKUP_REGISTRY")" || return 1
+    touch "$BACKUP_REGISTRY" || return 1
+    chmod 600 "$BACKUP_REGISTRY" 2>/dev/null || true
+    record="$(backup_record_for "$src" || true)"
+    if [ -n "$record" ]; then
+        IFS='|' read -r _ kind snapshot _ _ _ <<< "$record"
+        [ "$kind" = "absent" ] || printf '%s\n' "$snapshot"
+        return 0
+    fi
+
+    if [ ! -e "$src" ] && [ ! -L "$src" ]; then
+        printf '%s|absent|||\n' "$src" >> "$BACKUP_REGISTRY" || return 1
+        log_debug "$(t '已记录不存在的路径: ${src}')" >&2
+        return 0
+    fi
+
+    mode="$(stat -c '%a' "$src" 2>/dev/null || true)"
+    owner="$(stat -c '%u' "$src" 2>/dev/null || true)"
+    group="$(stat -c '%g' "$src" 2>/dev/null || true)"
+    source_parent="$(dirname "$src")"
+    snapshot_template="$(dirname "$BACKUP_REGISTRY")/$(echo "$src" | tr '/' '_').XXXXXX"
+    snapshot="$(mktemp "$snapshot_template")" || return 1
+
+    if [ -L "$src" ]; then
+        kind="symlink"
+        readlink "$src" > "$snapshot" || {
+            rm -f "$snapshot"
+            return 1
+        }
+    elif [ -d "$src" ]; then
+        kind="directory"
+        rm -f "$snapshot"
+        if ! tar -C "$source_parent" -cpf "$snapshot" "$(basename "$src")"; then
+            rm -f "$snapshot"
+            return 1
+        fi
+    elif [ -f "$src" ]; then
+        kind="file"
+        if ! cp -a "$src" "$snapshot"; then
+            rm -f "$snapshot"
+            return 1
+        fi
+    else
+        rm -f "$snapshot"
+        log_error "Unsupported backup path type: $src"
+        return 1
+    fi
+    chmod 600 "$snapshot" || {
+        rm -f "$snapshot"
+        return 1
+    }
+    printf '%s|%s|%s|%s|%s|%s\n' "$src" "$kind" "$snapshot" "$mode" "$owner" "$group" \
+        >> "$BACKUP_REGISTRY" || return 1
+    log_debug "$(t '已备份: ${src} → ${snapshot}')" >&2
+    printf '%s\n' "$snapshot"
 }
 
 # restore_file: 从最新备份恢复
@@ -425,8 +554,13 @@ restore_file() {
         log_warn "$(t '无备份记录，无法恢复: ${src}')"
         return 1
     fi
-    local latest_backup
-    latest_backup=$(grep "^${src}|" "${BACKUP_REGISTRY}" | tail -1 | cut -d'|' -f2)
+    local record latest_backup
+    record=$(grep "^${src}|" "${BACKUP_REGISTRY}" | tail -1)
+    latest_backup=$(printf '%s\n' "$record" | cut -d'|' -f3)
+    if [ -z "$latest_backup" ]; then
+        # Compatibility with registry.txt from versions before transaction records.
+        latest_backup=$(printf '%s\n' "$record" | cut -d'|' -f2)
+    fi
     if [[ -n "${latest_backup}" && -f "${latest_backup}" ]]; then
         cp -a "${latest_backup}" "${src}"
         log_ok "$(t '已恢复: ${src} ← ${latest_backup}')"
@@ -437,7 +571,53 @@ restore_file() {
     fi
 }
 
-# rollback_all: 回滚当前会话所有修改
+# rollback_record: Restores a transaction record. It intentionally covers only
+# tracked filesystem paths; packages, users, services, runtime firewall state,
+# and kernel runtime settings require resource-specific compensators.
+rollback_record() {
+    local src="$1"
+    local kind="$2"
+    local snapshot="$3"
+    local mode="$4"
+    local owner="$5"
+    local group="$6"
+    local parent
+
+    parent="$(dirname "$src")"
+    mkdir -p "$parent" || return 1
+    case "$kind" in
+        absent)
+            rm -rf -- "$src"
+            ;;
+        file)
+            [ -f "$snapshot" ] || return 1
+            cp -a "$snapshot" "$src" || return 1
+            apply_backup_metadata "$src" "$mode" "$owner" "$group"
+            ;;
+        directory)
+            [ -f "$snapshot" ] || return 1
+            rm -rf -- "$src"
+            tar -C "$parent" -xpf "$snapshot" || return 1
+            ;;
+        symlink)
+            [ -f "$snapshot" ] || return 1
+            rm -rf -- "$src"
+            ln -s "$(cat "$snapshot")" "$src" || return 1
+            if [ -n "$owner" ] && [ -n "$group" ]; then
+                chown -h "$owner:$group" "$src" 2>/dev/null || true
+            fi
+            ;;
+        *)
+            # Compatibility with registry.txt from versions before typed records.
+            [ -f "$kind" ] || return 1
+            cp -a "$kind" "$src" || return 1
+            ;;
+    esac
+}
+
+# rollback_all: Restores the first pre-change snapshot for every tracked path
+# in the selected registry. It is a bounded filesystem rollback, not a full
+# system transaction.
 rollback_all() {
     log_warn "$(t '开始回滚所有更改...')"
     audit "ROLLBACK_START" "$(t '用户触发回滚')"
@@ -445,14 +625,22 @@ rollback_all() {
         log_warn "$(t '无可回滚的操作')"
         return 0
     fi
-    local count=0
-    while IFS='|' read -r src dest; do
-        if [[ -f "${dest}" ]]; then
-            cp -a "${dest}" "${src}" 2>/dev/null && count=$((count + 1))
+    local count=0 failed=0
+    declare -A restored_sources=()
+    # 正向读取并跳过后续记录，确保使用每个文件的首次快照。
+    while IFS='|' read -r src kind snapshot mode owner group; do
+        [[ -n "${restored_sources["$src"]+x}" ]] && continue
+        if rollback_record "$src" "$kind" "$snapshot" "$mode" "$owner" "$group"; then
+            restored_sources["$src"]=1
+            count=$((count + 1))
+        else
+            failed=$((failed + 1))
+            log_error "Failed to restore tracked path: $src"
         fi
     done < "${BACKUP_REGISTRY}"
     log_ok "$(t '回滚完成: 已恢复 ${count} 个文件')"
-    audit "ROLLBACK_DONE" "$(t '已恢复 ${count} 个文件')"
+    audit "ROLLBACK_DONE" "$(t '已恢复 ${count} 个文件，失败 ${failed} 个')"
+    [ "$failed" -eq 0 ]
 }
 
 #===============================================================================
@@ -758,18 +946,22 @@ print_module_result() {
     local status="$1"
     local name="$2"
     local detail="${3:-}"
+    local detail_str=""
+    if [ -n "$detail" ]; then
+        detail_str=" \033[2;37m(${detail})\033[0m"
+    fi
     case "${status}" in
         done|success|ok)
-            echo -e "$(t '         \033[1;32m✔ 完成\033[0m${detail:+ \033[2;37m(${detail})\033[0m}')"
+            echo -e "$(t '         \033[1;32m✔ 完成\033[0m')${detail_str}"
             ;;
         failed|error)
-            echo -e "$(t '         \033[1;31m✖ 失败\033[0m${detail:+ \033[1;31m(${detail})\033[0m}')"
+            echo -e "$(t '         \033[1;31m✖ 失败\033[0m')${detail:+\033[1;31m (${detail})\033[0m}"
             ;;
         skipped)
-            echo -e "$(t '         \033[38;5;243m~ 跳过\033[0m${detail:+ \033[2;37m(${detail})\033[0m}')"
+            echo -e "$(t '         \033[38;5;243m~ 跳过\033[0m')${detail_str}"
             ;;
         *)
-            echo -e "         \033[1;34m? ${status}\033[0m${detail:+ \033[2;37m(${detail})\033[0m}"
+            echo -e "         \033[1;34m? ${status}\033[0m${detail_str}"
             ;;
     esac
 }
@@ -808,9 +1000,9 @@ print_review_card() {
     if [ "${SSH_PORT:-22}" = "22" ]; then
         keep_legacy_display="$(t '不适用 (端口已为 22)')"
     elif [ "${SSH_KEEP_LEGACY_PORT:-true}" = "true" ]; then
-        keep_legacy_display="${YELLOW}$(t 'yes (双端口过渡防失联: 同时监听 22 与 ')${SSH_PORT})${NC}"
+        keep_legacy_display="${YELLOW}$(t 'yes (双端口过渡防失联: 同时监听原有端口与 ')${SSH_PORT})${NC}"
     else
-        keep_legacy_display="${GREEN}$(t 'no (彻底关闭旧端口 22，仅监听 ')${SSH_PORT})${NC}"
+        keep_legacy_display="${YELLOW}$(t '生产保护强制保留 (装机期间保留原有端口防失联; 外部验证后方可独立关闭)')${NC}"
     fi
     print_kv "$(t '保留旧 SSH 端口:')" "$keep_legacy_display"
     print_kv "$(t 'Root 远程登录:')" "${PERMIT_ROOT_LOGIN:-}"
@@ -1037,7 +1229,7 @@ collect_actual_vps_status() {
     fi
     ACTUAL_FIREWALL="$(detect_firewall 2>/dev/null || printf '%s' unknown)"
     if [ "$ACTUAL_FIREWALL" = "ufw" ] && command -v ufw >/dev/null 2>&1; then
-        if ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
+        if LC_ALL=C ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
             ACTUAL_FIREWALL="ufw(active)"
         else
             ACTUAL_FIREWALL="ufw(inactive)"
@@ -1168,7 +1360,8 @@ print_health_report() {
                 local ssh_allowed=false port_num
                 if [ "$input_policy" = "DROP" ] || [ "$input_policy" = "REJECT" ]; then
                     for port_num in $(printf '%s\n' "$ACTUAL_SSH_PORTS" | tr ',' '\n' | sed 's/^.*://' | grep -E '^[0-9]+$'); do
-                        if iptables -S INPUT 2>/dev/null | grep -qE -- "-p tcp .*--dport ${port_num} .* ACCEPT"; then
+                        if iptables -S 2>/dev/null | grep -qE -- "-p tcp .*--dport ${port_num} .*(-j|--jump) ACCEPT" || \
+                           { command -v ufw >/dev/null 2>&1 && LC_ALL=C ufw status 2>/dev/null | grep -qE "^${port_num}(/tcp)?[[:space:]]+ALLOW"; }; then
                             ssh_allowed=true
                             break
                         fi

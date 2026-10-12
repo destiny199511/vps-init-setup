@@ -10,13 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create archive
+      - name: Create and verify release inputs
         run: |
           mkdir -p dist
+          source_commit="$(git rev-parse HEAD)"
           archive="dist/vps-init-setup-${GITHUB_REF_NAME}.tar.gz"
           tar -czf "$archive" \
             --exclude='.git' \
@@ -26,7 +29,29 @@ jobs:
             --exclude='logs' \
             --exclude='backups' \
             .
-          sha256sum "$archive" > "${archive}.sha256"
+          (
+            cd dist
+            sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256"
+          )
+
+          source_asset="vps-init-setup-${GITHUB_REF_NAME}-source.tar.gz"
+          curl --connect-timeout 10 --max-time 120 --retry 5 --retry-all-errors -fsSL \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/${source_commit}.tar.gz" \
+            -o "dist/${source_asset}"
+          (
+            cd dist
+            sha256sum "$source_asset" > "${source_asset}.sha256"
+          )
+          sha256sum install.sh | awk '{print $1 "  install.sh"}' > dist/install.sh.sha256
+          printf '%s\n' "$source_commit" > dist/source-commit.txt
+
+      - name: Attest release integrity metadata
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/source-commit.txt
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
@@ -34,3 +59,7 @@ jobs:
           files: |
             dist/vps-init-setup-${{ github.ref_name }}.tar.gz
             dist/vps-init-setup-${{ github.ref_name }}.tar.gz.sha256
+            dist/vps-init-setup-${{ github.ref_name }}-source.tar.gz
+            dist/vps-init-setup-${{ github.ref_name }}-source.tar.gz.sha256
+            dist/install.sh.sha256
+            dist/source-commit.txt

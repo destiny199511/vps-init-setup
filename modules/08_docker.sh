@@ -15,6 +15,98 @@ docker_prerequisites() {
     return 0
 }
 
+DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+
+restore_docker_apt_repository() {
+    local key_file="$1"
+    local source_file="$2"
+    local key_backup="$3"
+    local source_backup="$4"
+    local key_existed="$5"
+    local source_existed="$6"
+
+    if [ "$key_existed" = "true" ]; then
+        cp -p "$key_backup" "$key_file"
+    else
+        rm -f "$key_file"
+    fi
+    if [ "$source_existed" = "true" ]; then
+        cp -p "$source_backup" "$source_file"
+    else
+        rm -f "$source_file"
+    fi
+}
+
+docker_configure_apt_repository() {
+    local os_id keyring_dir key_file source_file key_tmp key_candidate source_candidate
+    local key_backup="" source_backup="" key_existed=false source_existed=false
+    local fingerprint expected_fingerprint codename architecture
+
+    os_id="$(detect_os_id)"
+    keyring_dir="${DOCKER_APT_KEYRING_DIR:-/etc/apt/keyrings}"
+    key_file="${DOCKER_APT_KEY_FILE:-${keyring_dir}/docker.gpg}"
+    source_file="${DOCKER_APT_SOURCE_FILE:-/etc/apt/sources.list.d/docker.list}"
+    expected_fingerprint="${DOCKER_GPG_FINGERPRINT^^}"
+    codename="$(lsb_release -cs)"
+    architecture="$(dpkg --print-architecture)"
+
+    mkdir -p "$keyring_dir" "$(dirname "$source_file")" || return 1
+    if [ -f "$key_file" ]; then
+        key_existed=true
+        key_backup="$(mktemp "${keyring_dir}/.docker.gpg.backup.XXXXXX")" || return 1
+        cp -p "$key_file" "$key_backup" || return 1
+    fi
+    if [ -f "$source_file" ]; then
+        source_existed=true
+        source_backup="$(mktemp "$(dirname "$source_file")/.docker.list.backup.XXXXXX")" || return 1
+        cp -p "$source_file" "$source_backup" || return 1
+    fi
+
+    key_tmp="$(mktemp "${keyring_dir}/.docker.gpg.download.XXXXXX")" || return 1
+    key_candidate="$(mktemp "${keyring_dir}/.docker.gpg.candidate.XXXXXX")" || {
+        rm -f "$key_tmp" "$key_backup" "$source_backup"
+        return 1
+    }
+    source_candidate="$(mktemp "$(dirname "$source_file")/.docker.list.candidate.XXXXXX")" || {
+        rm -f "$key_tmp" "$key_candidate" "$key_backup" "$source_backup"
+        return 1
+    }
+
+    if ! curl --connect-timeout 10 --max-time 60 --retry 2 --retry-all-errors -fsSL \
+        "https://download.docker.com/linux/${os_id}/gpg" -o "$key_tmp"; then
+        log_error "Failed to download Docker repository signing key"
+        rm -f "$key_tmp" "$key_candidate" "$source_candidate" "$key_backup" "$source_backup"
+        return 1
+    fi
+    fingerprint="$(gpg --batch --show-keys --with-colons "$key_tmp" 2>/dev/null | awk -F: '$1 == "fpr" {print toupper($10); exit}')"
+    if [ "$fingerprint" != "$expected_fingerprint" ]; then
+        log_error "Docker repository signing key fingerprint verification failed"
+        rm -f "$key_tmp" "$key_candidate" "$source_candidate" "$key_backup" "$source_backup"
+        return 1
+    fi
+    if ! gpg --batch --yes --dearmor --output "$key_candidate" "$key_tmp"; then
+        log_error "Failed to convert verified Docker repository signing key"
+        rm -f "$key_tmp" "$key_candidate" "$source_candidate" "$key_backup" "$source_backup"
+        return 1
+    fi
+    printf 'deb [arch=%s signed-by=%s] https://download.docker.com/linux/%s %s stable\n' \
+        "$architecture" "$key_file" "$os_id" "$codename" > "$source_candidate"
+    if ! install -m 644 "$key_candidate" "$key_file" || ! install -m 644 "$source_candidate" "$source_file"; then
+        log_error "Failed to install Docker APT repository files"
+        restore_docker_apt_repository "$key_file" "$source_file" "$key_backup" "$source_backup" "$key_existed" "$source_existed"
+        rm -f "$key_tmp" "$key_candidate" "$source_candidate" "$key_backup" "$source_backup"
+        return 1
+    fi
+    if ! apt_update; then
+        log_error "APT update failed after adding Docker repository; restoring previous repository files"
+        restore_docker_apt_repository "$key_file" "$source_file" "$key_backup" "$source_backup" "$key_existed" "$source_existed"
+        rm -f "$key_tmp" "$key_candidate" "$source_candidate" "$key_backup" "$source_backup"
+        return 1
+    fi
+    rm -f "$key_tmp" "$key_candidate" "$source_candidate" "$key_backup" "$source_backup"
+    return 0
+}
+
 docker_json_list() {
     local values="$1"
     local value trimmed first=true
@@ -275,19 +367,7 @@ docker_main() {
             # Install prerequisites
             install_package ca-certificates curl gnupg lsb-release
             
-            # Add Docker's official GPG key (non-interactive overwrite)
-            mkdir -p /etc/apt/keyrings
-            curl -fsSL "https://download.docker.com/linux/$(detect_os_id)/gpg" | \
-                gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
-            
-            # Set up the repository
-            echo \
-              "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$(detect_os_id) \
-              $(lsb_release -cs) stable" | \
-                tee /etc/apt/sources.list.d/docker.list > /dev/null
-            
-            # Update package index
-            apt_update
+                        docker_configure_apt_repository || return 1
             
             # Install Docker Engine
             install_package docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin

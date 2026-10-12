@@ -221,7 +221,7 @@ view_config_firewall() {
     local fw_type="none" fw_status="${RED}$(t '未启用')${NC}"
     if command -v ufw >/dev/null 2>&1; then
         fw_type="UFW"
-        if ufw status 2>/dev/null | grep -qi "status: active"; then
+        if LC_ALL=C ufw status 2>/dev/null | grep -qi "status: active"; then
             fw_status="${GREEN}$(t '已激活 (active)')${NC}"
         else
             fw_status="${YELLOW}$(t '未激活 (inactive)')${NC}"
@@ -250,8 +250,8 @@ view_config_firewall() {
     # 默认策略与规则概要
     if [ "$fw_type" = "UFW" ]; then
         local ufw_in ufw_out
-        ufw_in=$(ufw status verbose 2>/dev/null | grep -i "Default:" | awk '{print $2}' || true)
-        ufw_out=$(ufw status verbose 2>/dev/null | grep -i "Default:" | awk '{print $4}' || true)
+        ufw_in=$(LC_ALL=C ufw status verbose 2>/dev/null | grep -i "Default:" | awk '{print $2}' || true)
+        ufw_out=$(LC_ALL=C ufw status verbose 2>/dev/null | grep -i "Default:" | awk '{print $4}' || true)
         [ -n "$ufw_in" ] && print_kv "$(t '默认出入站策略:')" "Incoming: $ufw_in, Outgoing: $ufw_out"
     elif [ "$fw_type" = "Firewalld" ] && firewall-cmd --state >/dev/null 2>&1; then
         local def_zone
@@ -264,11 +264,11 @@ view_config_firewall() {
     fi
     
     # 开放的防火墙规则概要
-    if [ "$fw_type" = "UFW" ] && ufw status 2>/dev/null | grep -qi "status: active"; then
+    if [ "$fw_type" = "UFW" ] && LC_ALL=C ufw status 2>/dev/null | grep -qi "status: active"; then
         echo -e "  \033[1;36m│\033[0m  ${CYAN}$(t 'UFW 放行规则列表:')${NC}"
         while read -r rule; do
             [ -n "$rule" ] && echo -e "  \033[1;36m│\033[0m   ${DIM}▸ ${rule}${NC}"
-        done < <(ufw status numbered 2>/dev/null | grep -E '\[ *[0-9]+\]' || true)
+        done < <(LC_ALL=C ufw status numbered 2>/dev/null | grep -E '\[ *[0-9]+\]' || true)
     fi
     
     # 系统实际监听端口列表

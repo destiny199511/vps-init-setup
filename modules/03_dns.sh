@@ -75,6 +75,12 @@ dns_main() {
         log_error "Invalid secondary DNS IP: $secondary_dns"
         return 1
     fi
+
+    local dns_lookup_timeout="${DNS_LOOKUP_TIMEOUT:-10}"
+    if [[ ! "$dns_lookup_timeout" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "DNS_LOOKUP_TIMEOUT must be a positive integer: $dns_lookup_timeout"
+        return 1
+    fi
     
     # Skip if already configured correctly
     if [ "$dns_mode" = "systemd-resolved" ]; then
@@ -199,8 +205,8 @@ dns_main() {
     
     # Test DNS resolution
     log_info "Testing DNS resolution..."
-    if getent ahostsv4 one.one.one.one >/dev/null 2>&1 || \
-       getent ahostsv6 one.one.one.one >/dev/null 2>&1; then
+    if timeout "$dns_lookup_timeout" getent ahostsv4 one.one.one.one >/dev/null 2>&1 || \
+       timeout "$dns_lookup_timeout" getent ahostsv6 one.one.one.one >/dev/null 2>&1; then
         log_info "DNS resolution test successful"
     else
         log_error "DNS resolution test failed; restoring the previous configuration"

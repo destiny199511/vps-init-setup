@@ -9,8 +9,10 @@ VPS 一键装机安装脚本
 
 选项:
   --install-dir DIR   目标安装目录 (default: /opt/vps-init-setup)
-  --ref REF           安装的分支或标签 (default: main)
-  --repo-url URL      指定代码仓库 URL
+    --ref COMMIT        40 位不可变 Git commit（远程安装必填）
+    --sha256 SHA256     对应归档的 SHA-256（远程安装必填）
+    --repo-url URL      指定 GitHub HTTPS 或 SSH 仓库 URL
+    --update-only       仅更新源码，不启动初始化向导
   --help, -h          显示此帮助信息
 
 其他参数将直接传递给 vps_setup.sh
@@ -18,8 +20,10 @@ EOF
 }
 
 INSTALL_DIR="${VPS_INIT_SETUP_INSTALL_DIR:-/opt/vps-init-setup}"
-REF="${VPS_INIT_SETUP_REF:-main}"
+REF="${VPS_INIT_SETUP_REF:-}"
 REPO_URL="${VPS_INIT_SETUP_REPO_URL:-https://github.com/destiny199511/vps-init-setup.git}"
+EXPECTED_SHA256="${VPS_INIT_SETUP_SHA256:-}"
+UPDATE_ONLY=false
 PASSTHROUGH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -35,6 +39,14 @@ while [[ $# -gt 0 ]]; do
         --repo-url)
             REPO_URL="$2"
             shift 2
+            ;;
+        --sha256)
+            EXPECTED_SHA256="$2"
+            shift 2
+            ;;
+        --update-only)
+            UPDATE_ONLY=true
+            shift
             ;;
         --help|-h)
             usage
@@ -91,25 +103,42 @@ fi
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/vps_setup.sh" ]; then
     INSTALL_DIR="$SCRIPT_DIR"
 else
+    if [[ ! "$REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        echo "错误: 远程安装必须通过 --ref 指定 40 位不可变 Git commit。" >&2
+        exit 1
+    fi
+    if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        echo "错误: 远程安装必须通过 --sha256 提供已独立发布的归档校验和。" >&2
+        exit 1
+    fi
+
+    if [[ "$REPO_URL" =~ ^https://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)(\.git)?$ ]] || \
+       [[ "$REPO_URL" =~ ^git@github\.com:([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)(\.git)?$ ]]; then
+        repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    else
+        echo "错误: 远程安装只接受规范的 GitHub HTTPS 或 SSH 仓库 URL。" >&2
+        exit 1
+    fi
+
     echo "正在下载 VPS 初始化脚本 (${REF})..."
     mkdir -p "$INSTALL_DIR"
 
     tmp_dir="$(mktemp -d)"
     trap 'rm -rf "$tmp_dir"' EXIT
 
-    repo="${REPO_URL#git@github.com:}"
-    repo="${repo#https://github.com/}"
-    repo="${repo#http://github.com/}"
-    repo="${repo%.git}"
-
-    archive_url="https://github.com/${repo}/archive/refs/heads/${REF}.tar.gz"
-    if ! curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz" 2>/dev/null; then
-        archive_url="https://github.com/${repo}/archive/refs/tags/${REF}.tar.gz"
-        if ! curl -fsSL "$archive_url" -o "$tmp_dir/source.tar.gz"; then
-            echo "错误: 下载源码包失败，请检查网络连接或仓库地址。" >&2
-            exit 1
-        fi
+    archive_url="https://github.com/${repo}/archive/${REF}.tar.gz"
+    if ! curl --connect-timeout 10 --max-time 120 --retry 2 --retry-all-errors -fsSL \
+        "$archive_url" -o "$tmp_dir/source.tar.gz"; then
+        echo "错误: 下载源码包失败，请检查网络连接或仓库地址。" >&2
+        exit 1
     fi
+
+    echo "正在验证源码归档 SHA-256 完整性..."
+    if ! printf '%s  %s\n' "$EXPECTED_SHA256" "$tmp_dir/source.tar.gz" | sha256sum -c - >/dev/null 2>&1; then
+        echo "FATAL: 源码归档 SHA-256 校验失败！" >&2
+        exit 1
+    fi
+    echo "SHA-256 校验通过。"
 
     echo "正在解压并安装到 ${INSTALL_DIR} ..."
     mkdir -p "$tmp_dir/extracted"
@@ -133,6 +162,11 @@ fi
 
 cd "$INSTALL_DIR"
 chmod +x vps_setup.sh lib/*.sh modules/*.sh 2>/dev/null || chmod +x vps_setup.sh
+
+if [ "$UPDATE_ONLY" = true ]; then
+    echo "代码已更新至 ${INSTALL_DIR}，--update-only 模式结束。"
+    exit 0
+fi
 
 echo "安装完成，正在启动初始化向导..."
 if [ -r /dev/tty ]; then

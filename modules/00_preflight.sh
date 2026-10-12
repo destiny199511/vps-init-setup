@@ -16,7 +16,7 @@ preflight_prerequisites() {
     fi
     
     # Check for required commands
-    local required_commands="awk sed grep cut tr xargs"
+    local required_commands="awk sed grep cut tr xargs timeout"
     for cmd in $required_commands; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             echo "Error: Required command '$cmd' not found"
@@ -24,6 +24,31 @@ preflight_prerequisites() {
         fi
     done
     
+    return 0
+}
+
+check_root_filesystem_capacity() {
+    local available_space available_inodes min_free_inodes
+    min_free_inodes="${MIN_FREE_INODES:-4096}"
+    if [[ ! "$min_free_inodes" =~ ^[0-9]+$ ]]; then
+        log_error "MIN_FREE_INODES must be a non-negative integer: $min_free_inodes"
+        return 1
+    fi
+
+    available_space=$(df -k / | awk 'NR==2 {print $4}')
+    if [[ ! "$available_space" =~ ^[0-9]+$ ]] || [ "$available_space" -lt 524288 ]; then
+        log_error "Insufficient disk space: ${available_space:-unknown}KB free on /"
+        log_error "Need at least 512MB free on /"
+        return 1
+    fi
+    log_info "Sufficient disk space available ($(awk -v available_space="$available_space" 'BEGIN {printf "%.1f GB", available_space/1024/1024}') free)"
+
+    available_inodes=$(df -Pi / | awk 'NR==2 {print $4}')
+    if [[ ! "$available_inodes" =~ ^[0-9]+$ ]] || [ "$available_inodes" -lt "$min_free_inodes" ]; then
+        log_error "Insufficient free inodes on /: ${available_inodes:-unknown}; need at least $min_free_inodes"
+        return 1
+    fi
+    log_info "Sufficient free inodes available ($available_inodes free)"
     return 0
 }
 
@@ -66,14 +91,8 @@ preflight_main() {
 
     # 3. Check disk space
     log_info "Checking disk space..."
-    local available_space
-    available_space=$(df -k / | awk 'NR==2 {print $4}')
-    if [ "$available_space" -lt 524288 ]; then  # 512MB minimum
-        log_error "Insufficient disk space: $(echo $available_space | awk '{printf "%.1f GB", $1/1024/1024}')"
-        log_error "Need at least 512MB free on /"
+    if ! check_root_filesystem_capacity; then
         issues_found=$((issues_found + 1))
-    else
-        log_info "Sufficient disk space available ($(echo $available_space | awk '{printf "%.1f GB", $1/1024/1024}') free)"
     fi
 
     # 4. Check available memory

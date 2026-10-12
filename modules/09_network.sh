@@ -11,6 +11,18 @@ network_prerequisites() {
     return 0
 }
 
+restore_sysctl_config() {
+    local sysctl_config="$1"
+    local sysctl_backup="$2"
+    local had_sysctl_config="$3"
+
+    if [ "$had_sysctl_config" = "true" ] && [ -n "$sysctl_backup" ] && [ -f "$sysctl_backup" ]; then
+        cp -p "$sysctl_backup" "$sysctl_config"
+    else
+        rm -f "$sysctl_config"
+    fi
+}
+
 network_main() {
     log_info "Starting kernel network optimization..."
 
@@ -36,9 +48,22 @@ network_main() {
     local netdev_max_backlog="${NETDEV_MAX_BACKLOG:-5000}"
     local somaxconn="${SOMAXCONN:-65535}"
     local enable_bbr="${ENABLE_BBR:-true}"
+    local sysctl_config="${SYSCTL_CONFIG_FILE:-/etc/sysctl.d/99-vps-network.conf}"
+    local sysctl_dir sysctl_candidate sysctl_backup="" had_sysctl_config=false
+    sysctl_dir="$(dirname "$sysctl_config")"
 
     # Backup current sysctl config
-    backup_file "/etc/sysctl.conf" >/dev/null 2>&1 || true
+    if [ -e "$sysctl_config" ] || [ -L "$sysctl_config" ]; then
+        had_sysctl_config=true
+        sysctl_backup="$(backup_file "$sysctl_config")" || {
+            log_error "Failed to back up existing sysctl configuration: $sysctl_config"
+            return 1
+        }
+    fi
+    sysctl_candidate="$(mktemp "${sysctl_dir}/.$(basename "$sysctl_config").XXXXXX")" || {
+        log_error "Failed to create temporary sysctl configuration"
+        return 1
+    }
 
     # Create new sysctl configuration
     log_info "Applying kernel network parameters..."
@@ -69,7 +94,8 @@ network_main() {
         echo "net.ipv4.tcp_syncookies = $tcp_syncookies"
         echo ""
         echo "# TCP Fast Open"
-        echo "net.ipv4.tcp_fastopen = $tcp_fastopen"        echo ""
+        echo "net.ipv4.tcp_fastopen = $tcp_fastopen"
+        echo ""
         echo "# Security Hardening - Anti-Spoofing & Anti-DDoS"
         echo "net.ipv4.conf.all.rp_filter = 1"
         echo "net.ipv4.conf.default.rp_filter = 1"
@@ -83,22 +109,28 @@ network_main() {
         echo "fs.protected_hardlinks = 1"
         echo "fs.protected_symlinks = 1"
         echo "fs.suid_dumpable = 0"
-    } > /etc/sysctl.d/99-vps-network.conf
-
-    # Apply settings
-    sysctl -p /etc/sysctl.d/99-vps-network.conf >/dev/null 2>&1
-
-    # Enable BBR if configured
-    if [ "$enable_bbr" = "true" ]; then
-        log_info "Enabling BBR congestion control..."
-        {
+        if [ "$enable_bbr" = "true" ]; then
             echo ""
             echo "# BBR congestion control"
             echo "net.core.default_qdisc = fq"
             echo "net.ipv4.tcp_congestion_control = bbr"
-        } >> /etc/sysctl.d/99-vps-network.conf
+        fi
+    } > "$sysctl_candidate"
+
+    if [ "$enable_bbr" = "true" ]; then
+        log_info "Enabling BBR congestion control..."
         modprobe tcp_bbr 2>/dev/null || true
-        sysctl -p /etc/sysctl.d/99-vps-network.conf >/dev/null 2>&1
+    fi
+    if ! install -m 644 "$sysctl_candidate" "$sysctl_config"; then
+        rm -f "$sysctl_candidate"
+        log_error "Failed to install sysctl configuration: $sysctl_config"
+        return 1
+    fi
+    rm -f "$sysctl_candidate"
+    if ! sysctl -p "$sysctl_config" >/dev/null 2>&1; then
+        log_error "Failed to apply sysctl configuration; restoring the previous file"
+        restore_sysctl_config "$sysctl_config" "$sysctl_backup" "$had_sysctl_config"
+        return 1
     fi
 
     audit "NETWORK_OPTIMIZED" "bbr=$enable_bbr ip_forward=$ip_forward"
