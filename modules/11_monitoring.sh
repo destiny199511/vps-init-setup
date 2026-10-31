@@ -11,6 +11,65 @@ monitoring_prerequisites() {
     return 0
 }
 
+monitoring_config_candidate() {
+    local target="$1"
+    local parent candidate
+    parent="$(dirname "$target")"
+
+    if [ -L "$target" ] || { [ -e "$target" ] && [ ! -f "$target" ]; }; then
+        log_error "Monitoring configuration path is not a regular file: $target"
+        return 1
+    fi
+    if ! backup_file "$target" >/dev/null; then
+        log_error "Failed to back up monitoring configuration: $target"
+        return 1
+    fi
+    mkdir -p "$parent" || {
+        log_error "Failed to create monitoring configuration directory: $parent"
+        return 1
+    }
+    candidate="$(mktemp "$parent/.$(basename "$target").XXXXXX")" || {
+        log_error "Failed to create temporary monitoring configuration: $target"
+        return 1
+    }
+    if [ -f "$target" ]; then
+        if ! cp -p "$target" "$candidate"; then
+            rm -f "$candidate"
+            log_error "Failed to stage monitoring configuration: $target"
+            return 1
+        fi
+    elif ! chmod 644 "$candidate"; then
+        rm -f "$candidate"
+        log_error "Failed to set monitoring configuration permissions: $target"
+        return 1
+    fi
+    printf '%s\n' "$candidate"
+}
+
+monitoring_commit_config() {
+    local candidate="$1"
+    local target="$2"
+    if ! mv -f "$candidate" "$target"; then
+        rm -f "$candidate"
+        log_error "Failed to install monitoring configuration: $target"
+        return 1
+    fi
+}
+
+monitoring_restore_service_config() {
+    local target="$1"
+    local service_name="$2"
+    if ! restore_tracked_path "$target"; then
+        log_error "Failed to restore monitoring configuration: $target"
+        return 1
+    fi
+    if ! systemctl restart "$service_name" 2>/dev/null && \
+       ! service "$service_name" restart 2>/dev/null; then
+        log_error "Failed to restart $service_name with its restored configuration"
+        return 1
+    fi
+}
+
 monitoring_main() {
     log_info "Starting monitoring setup..."
 
@@ -98,7 +157,10 @@ monitoring_main() {
         if ! command -v netdata >/dev/null 2>&1; then
             case "$(detect_package_manager)" in
                 apt|deb|dnf|yum|rpm|apk)
-                    install_package netdata
+                    install_package netdata || {
+                        log_error "Failed to install Netdata"
+                        return 1
+                    }
                     ;;
                 *)
                     log_error "Netdata must be installed from a signed distribution package repository on this OS"
@@ -108,27 +170,46 @@ monitoring_main() {
         fi
 
         # Secure Netdata: bind only to localhost to prevent public exposure
-        mkdir -p /etc/netdata
+        local netdata_config_candidate
+        netdata_config_candidate="$(monitoring_config_candidate /etc/netdata/netdata.conf)" || return 1
         if [ -f /etc/netdata/netdata.conf ]; then
-            if grep -q "bind to =" /etc/netdata/netdata.conf; then
-                sed -i 's/^[# ]*bind to =.*/bind to = 127.0.0.1/' /etc/netdata/netdata.conf
+            if grep -q "bind to =" "$netdata_config_candidate"; then
+                sed -i 's/^[# ]*bind to =.*/bind to = 127.0.0.1/' "$netdata_config_candidate" || {
+                    rm -f "$netdata_config_candidate"
+                    log_error "Failed to secure Netdata bind address"
+                    return 1
+                }
             else
-                printf "\n[web]\n    bind to = 127.0.0.1\n" >> /etc/netdata/netdata.conf
+                printf "\n[web]\n    bind to = 127.0.0.1\n" >> "$netdata_config_candidate" || {
+                    rm -f "$netdata_config_candidate"
+                    log_error "Failed to secure Netdata bind address"
+                    return 1
+                }
             fi
         else
-            cat <<'EOF' > /etc/netdata/netdata.conf
+            cat <<'EOF' > "$netdata_config_candidate"
 [web]
     bind to = 127.0.0.1
 EOF
         fi
+        monitoring_commit_config "$netdata_config_candidate" /etc/netdata/netdata.conf || return 1
 
         if ! systemctl enable --now netdata 2>/dev/null && ! service netdata start 2>/dev/null; then
+            monitoring_restore_service_config /etc/netdata/netdata.conf netdata || true
             log_error "Netdata package installed but its service could not be started"
             return 1
         fi
-        systemctl restart netdata 2>/dev/null || service netdata restart 2>/dev/null || true
+        if ! systemctl restart netdata 2>/dev/null && ! service netdata restart 2>/dev/null; then
+            monitoring_restore_service_config /etc/netdata/netdata.conf netdata || true
+            log_error "Failed to restart Netdata with the secured configuration"
+            return 1
+        fi
 
-        if command -v netdata >/dev/null 2>&1 && systemctl is-active --quiet netdata; then
+        local netdata_active=false
+        if systemctl is-active --quiet netdata 2>/dev/null || service netdata status >/dev/null 2>&1; then
+            netdata_active=true
+        fi
+        if command -v netdata >/dev/null 2>&1 && [ "$netdata_active" = "true" ]; then
             log_info "Netdata installed and running (bound to 127.0.0.1:19999)"
             changes_made=true
             audit "MONITORING_NETDATA_INSTALLED" "port=19999 bind=127.0.0.1"
@@ -143,30 +224,96 @@ EOF
         log_info "Installing Prometheus Node Exporter..."
         case "$(detect_package_manager)" in
             apt|deb)
-                install_package prometheus-node-exporter
-                # Secure Node Exporter: bind only to localhost to prevent public exposure
-                if [ -d /etc/default ]; then
-                    echo 'ARGS="--web.listen-address=127.0.0.1:9100"' > /etc/default/prometheus-node-exporter
+                install_package prometheus-node-exporter || {
+                    log_error "Failed to install Prometheus Node Exporter"
+                    return 1
+                }
+                local node_exporter_config_candidate
+                node_exporter_config_candidate="$(monitoring_config_candidate /etc/default/prometheus-node-exporter)" || return 1
+                if ! printf '%s\n' 'ARGS="--web.listen-address=127.0.0.1:9100"' > "$node_exporter_config_candidate"; then
+                    rm -f "$node_exporter_config_candidate"
+                    log_error "Failed to configure Node Exporter bind address"
+                    return 1
                 fi
+                monitoring_commit_config "$node_exporter_config_candidate" /etc/default/prometheus-node-exporter || return 1
                 if ! systemctl enable --now prometheus-node-exporter; then
+                    monitoring_restore_service_config /etc/default/prometheus-node-exporter prometheus-node-exporter || true
                     log_error "Prometheus Node Exporter package installed but its service could not be started"
                     return 1
                 fi
-                systemctl restart prometheus-node-exporter 2>/dev/null || true
+                if ! systemctl restart prometheus-node-exporter 2>/dev/null; then
+                    monitoring_restore_service_config /etc/default/prometheus-node-exporter prometheus-node-exporter || true
+                    log_error "Failed to restart Node Exporter with the secured configuration"
+                    return 1
+                fi
                 ;;
             dnf|yum|rpm)
-                install_package node_exporter
+                install_package node_exporter || {
+                    log_error "Failed to install Node Exporter"
+                    return 1
+                }
+                local node_exporter_config_paths=()
+                local node_exporter_candidates=()
+                local config_path config_candidate candidate
                 if [ -d /etc/default ]; then
-                    echo 'OPTIONS="--web.listen-address=127.0.0.1:9100"' > /etc/default/node_exporter 2>/dev/null || true
+                    config_path=/etc/default/node_exporter
+                    config_candidate="$(monitoring_config_candidate "$config_path")" || return 1
+                    if ! printf '%s\n' 'OPTIONS="--web.listen-address=127.0.0.1:9100"' > "$config_candidate"; then
+                        rm -f "$config_candidate"
+                        for candidate in "${node_exporter_candidates[@]}"; do rm -f "$candidate"; done
+                        log_error "Failed to stage Node Exporter configuration: $config_path"
+                        return 1
+                    fi
+                    node_exporter_config_paths+=("$config_path")
+                    node_exporter_candidates+=("$config_candidate")
                 fi
                 if [ -d /etc/sysconfig ]; then
-                    echo 'OPTIONS="--web.listen-address=127.0.0.1:9100"' > /etc/sysconfig/node_exporter 2>/dev/null || true
+                    config_path=/etc/sysconfig/node_exporter
+                    if ! config_candidate="$(monitoring_config_candidate "$config_path")"; then
+                        for candidate in "${node_exporter_candidates[@]}"; do rm -f "$candidate"; done
+                        return 1
+                    fi
+                    if ! printf '%s\n' 'OPTIONS="--web.listen-address=127.0.0.1:9100"' > "$config_candidate"; then
+                        rm -f "$config_candidate"
+                        for candidate in "${node_exporter_candidates[@]}"; do rm -f "$candidate"; done
+                        log_error "Failed to stage Node Exporter configuration: $config_path"
+                        return 1
+                    fi
+                    node_exporter_config_paths+=("$config_path")
+                    node_exporter_candidates+=("$config_candidate")
                 fi
+                if [ "${#node_exporter_config_paths[@]}" -eq 0 ]; then
+                    log_error "No supported Node Exporter configuration directory is available"
+                    return 1
+                fi
+                local config_index
+                for config_index in "${!node_exporter_config_paths[@]}"; do
+                    if ! monitoring_commit_config "${node_exporter_candidates[$config_index]}" \
+                        "${node_exporter_config_paths[$config_index]}"; then
+                        for candidate in "${node_exporter_candidates[@]}"; do rm -f "$candidate"; done
+                        for config_path in "${node_exporter_config_paths[@]}"; do
+                            restore_tracked_path "$config_path" || \
+                                log_error "Failed to restore Node Exporter configuration: $config_path"
+                        done
+                        return 1
+                    fi
+                done
                 if ! systemctl enable --now node_exporter; then
+                    for config_path in "${node_exporter_config_paths[@]}"; do
+                        restore_tracked_path "$config_path" || \
+                            log_error "Failed to restore Node Exporter configuration: $config_path"
+                    done
                     log_error "Prometheus Node Exporter package installed but its service could not be started"
                     return 1
                 fi
-                systemctl restart node_exporter 2>/dev/null || true
+                if ! systemctl restart node_exporter 2>/dev/null; then
+                    for config_path in "${node_exporter_config_paths[@]}"; do
+                        restore_tracked_path "$config_path" || \
+                            log_error "Failed to restore Node Exporter configuration: $config_path"
+                    done
+                    log_error "Failed to restart Node Exporter with the secured configuration"
+                    return 1
+                fi
                 ;;
             *)
                 log_error "Node Exporter must be installed from a signed distribution package repository on this OS"

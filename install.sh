@@ -64,10 +64,16 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-if [ -z "$INSTALL_DIR" ] || [ "$INSTALL_DIR" = "/" ] || [ "$INSTALL_DIR" = "/etc" ] || [ "$INSTALL_DIR" = "/bin" ] || [ "$INSTALL_DIR" = "/sbin" ] || [ "$INSTALL_DIR" = "/usr" ] || [ "$INSTALL_DIR" = "/var" ]; then
-    echo "Refusing unsafe install directory: $INSTALL_DIR" >&2
-    exit 1
-fi
+canonical_install_dir="$(realpath -m "$INSTALL_DIR" 2>/dev/null || printf '%s' "$INSTALL_DIR")"
+canonical_install_dir="${canonical_install_dir%/}"
+[ -z "$canonical_install_dir" ] && canonical_install_dir="/"
+
+case "$canonical_install_dir" in
+    ""|"/"|"/bin"|"/sbin"|"/usr"|"/etc"|"/var"|"/boot"|"/root"|"/dev"|"/proc"|"/sys"|"/home")
+        echo "Refusing unsafe install directory: $INSTALL_DIR" >&2
+        exit 1
+        ;;
+esac
 
 install_package() {
     local pkg="$1"

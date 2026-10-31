@@ -45,22 +45,46 @@ hostname_main() {
         state_mark "hostname" "completed"
         return 0
     fi
+
+    if [ -L /etc/hosts ] || { [ -e /etc/hosts ] && [ ! -f /etc/hosts ]; }; then
+        log_error "/etc/hosts must be a regular file; refusing to replace a managed or unsupported path"
+        return 1
+    fi
     
     # Backup current configuration
-    local hosts_backup etc_hostname_backup
-    hosts_backup=$(backup_file "/etc/hosts") || true
-    etc_hostname_backup=$(backup_file "/etc/hostname") || true
+    if ! backup_file "/etc/hosts" >/dev/null || \
+       ! backup_file "/etc/hostname" >/dev/null; then
+        log_error "Failed to back up hostname configuration; no changes were made"
+        return 1
+    fi
+
+    local hosts_candidate hosts_mode
+    hosts_candidate="$(mktemp /etc/.hosts.XXXXXX)" || {
+        log_error "Failed to create a temporary /etc/hosts file"
+        return 1
+    }
+    hosts_mode="$(stat -c '%a' /etc/hosts 2>/dev/null || printf '644')"
     
     # Set new hostname
     log_info "Setting hostname to: $target_hostname"
     
     case "$(detect_init_system)" in
         systemd)
-            hostnamectl set-hostname "$target_hostname"
+            if ! hostnamectl set-hostname "$target_hostname"; then
+                rm -f "$hosts_candidate"
+                log_error "Failed to set system hostname"
+                return 1
+            fi
             ;;
         *)
-            printf '%s\n' "$target_hostname" > /etc/hostname
-            hostname "$target_hostname"
+            if ! printf '%s\n' "$target_hostname" > /etc/hostname || \
+               ! hostname "$target_hostname"; then
+                rm -f "$hosts_candidate"
+                restore_tracked_path /etc/hostname || \
+                    log_error "Failed to restore /etc/hostname"
+                log_error "Failed to set system hostname"
+                return 1
+            fi
             ;;
     esac
     
@@ -92,16 +116,28 @@ hostname_main() {
         echo "::1     localhost ip6-localhost ip6-loopback"
         echo "ff02::1 ip6-allnodes"
         echo "ff02::2 ip6-allrouters"
-    } > /etc/hosts.new
+    } > "$hosts_candidate"
     
     # Preserve any custom entries from the original hosts file
-    if [ -n "$hosts_backup" ] && [ -f "$hosts_backup" ]; then
-        # Extract non-localhost/127.0.0.1 entries from backup
-        grep -vE '^(127\.0\.0\.1|::1|localhost)' "$hosts_backup" | \
-            grep -v '^$' >> /etc/hosts.new
+    if [ -f /etc/hosts ]; then
+        if ! awk 'NF && $1 !~ /^127\./ && $1 != "::1" { print }' /etc/hosts >> "$hosts_candidate"; then
+            rm -f "$hosts_candidate"
+            restore_tracked_path /etc/hostname || \
+                log_error "Failed to restore /etc/hostname"
+            hostname "$current_hostname" 2>/dev/null || true
+            log_error "Failed to preserve custom /etc/hosts entries"
+            return 1
+        fi
     fi
-    
-    mv /etc/hosts.new /etc/hosts
+
+    if ! chmod "$hosts_mode" "$hosts_candidate" || ! mv -f "$hosts_candidate" /etc/hosts; then
+        rm -f "$hosts_candidate"
+        restore_tracked_path /etc/hostname || \
+            log_error "Failed to restore /etc/hostname"
+        hostname "$current_hostname" 2>/dev/null || true
+        log_error "Failed to atomically install /etc/hosts"
+        return 1
+    fi
     
     # Verify the change
     local new_hostname
@@ -118,14 +154,12 @@ hostname_main() {
         log_error "Failed to set hostname. Current: $new_hostname, Expected: $target_hostname"
         
         # Attempt rollback
-        if [ -n "$etc_hostname_backup" ] && [ -f "$etc_hostname_backup" ]; then
-            cp -p "$etc_hostname_backup" /etc/hostname
+        if restore_tracked_path "/etc/hostname"; then
             hostname "$current_hostname"
             log_info "Rolled back hostname to: $current_hostname"
         fi
         
-        if [ -n "$hosts_backup" ] && [ -f "$hosts_backup" ]; then
-            cp -p "$hosts_backup" /etc/hosts
+        if restore_tracked_path "/etc/hosts"; then
             log_info "Rolled back /etc/hosts"
         fi
         

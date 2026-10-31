@@ -41,6 +41,31 @@ ssh_resolve_migration_ports() {
     printf -v "$output_var" '%s' "$computed_ports"
 }
 
+ssh_systemd_socket_activation_enabled() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+
+    local socket_unit
+    for socket_unit in ssh.socket sshd.socket; do
+        if systemctl is-active --quiet "$socket_unit" 2>/dev/null || \
+           systemctl is-enabled --quiet "$socket_unit" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+ssh_port_migration_allowed() {
+    local current_port="$1"
+    local target_port="$2"
+
+    if [ "$target_port" != "$current_port" ] && ssh_systemd_socket_activation_enabled; then
+        log_error "Refusing SSH port migration while systemd socket activation is enabled."
+        log_error "Migrate ssh.socket/sshd.socket in a separate, verified maintenance change, then rerun this module."
+        return 1
+    fi
+    return 0
+}
+
 configure_ssh_socket_ports() {
     local socket_unit socket_dir socket_dropin configured_port
 
@@ -139,9 +164,20 @@ ssh_main() {
         fi
     fi
     
-    # Backup SSH config
+    # Refuse to rewrite SSH configuration unless an exact file snapshot exists.
     local sshd_config_backup
-    sshd_config_backup=$(backup_file "/etc/ssh/sshd_config") || true
+    if [ -L /etc/ssh/sshd_config ] || [ ! -f /etc/ssh/sshd_config ]; then
+        log_error "Refusing to rewrite SSH configuration unless /etc/ssh/sshd_config is a regular file"
+        return 1
+    fi
+    sshd_config_backup=$(backup_file "/etc/ssh/sshd_config") || {
+        log_error "Failed to back up /etc/ssh/sshd_config; no SSH changes were made"
+        return 1
+    }
+    if [ -z "$sshd_config_backup" ] || [ ! -f "$sshd_config_backup" ]; then
+        log_error "SSH configuration snapshot is missing; no SSH changes were made"
+        return 1
+    fi
     
     # Get current SSH ports from sshd and socket activation.
     local current_ports current_port
@@ -162,6 +198,8 @@ ssh_main() {
         log_error "Port must be between 1 and 65535"
         return 1
     fi
+
+    ssh_port_migration_allowed "$current_port" "$target_port" || return 1
     
     # Check if port is already in use (basic check)
     if [ "$target_port" -ne 22 ]; then
@@ -404,29 +442,61 @@ ssh_main() {
     
     # Validate the new config
     if sshd -t -f /etc/ssh/sshd_config.new; then
+        chmod 600 /etc/ssh/sshd_config.new 2>/dev/null || true
+        chown root:root /etc/ssh/sshd_config.new 2>/dev/null || true
         mv /etc/ssh/sshd_config.new /etc/ssh/sshd_config
         log_info "SSH configuration updated successfully"
 
-        # On systemd systems, disable socket activation if present to prevent port conflict with ssh.service
-        if command -v systemctl >/dev/null 2>&1; then
-            for socket_unit in ssh.socket sshd.socket; do
-                if systemctl list-unit-files "$socket_unit" --no-legend 2>/dev/null | grep -q "$socket_unit"; then
-                    systemctl stop "$socket_unit" 2>/dev/null || true
-                    systemctl disable "$socket_unit" 2>/dev/null || true
-                fi
-            done
-            systemctl daemon-reload 2>/dev/null || true
-        fi
-        
         # Reload/restart the standard SSH service
         log_info "Reloading SSH service${ssh_service:+ ($ssh_service)}..."
-        if [ -n "$ssh_service" ] && command -v systemctl >/dev/null 2>&1; then
+        local ssh_reload_ok=true
+        if ssh_systemd_socket_activation_enabled; then
+            local socket_active=false socket_unit socket_unit_to_start=""
+            for socket_unit in ssh.socket sshd.socket; do
+                if systemctl is-active --quiet "$socket_unit" 2>/dev/null; then
+                    socket_active=true
+                    break
+                elif [ -z "$socket_unit_to_start" ] && \
+                     systemctl is-enabled --quiet "$socket_unit" 2>/dev/null; then
+                    socket_unit_to_start="$socket_unit"
+                fi
+            done
+            if [ "$socket_active" != "true" ]; then
+                if [ -z "$socket_unit_to_start" ] || \
+                   ! systemctl start "$socket_unit_to_start" 2>/dev/null; then
+                    ssh_reload_ok=false
+                fi
+            elif [ -n "$ssh_service" ] && systemctl is-active --quiet "$ssh_service" 2>/dev/null && \
+                 ! systemctl reload "$ssh_service" 2>/dev/null; then
+                ssh_reload_ok=false
+            fi
+        elif [ -n "$ssh_service" ] && command -v systemctl >/dev/null 2>&1; then
             systemctl enable "$ssh_service" 2>/dev/null || true
-            systemctl restart "$ssh_service" 2>/dev/null || systemctl reload "$ssh_service" 2>/dev/null || true
+            if ! systemctl restart "$ssh_service" 2>/dev/null && \
+               ! systemctl reload "$ssh_service" 2>/dev/null; then
+                ssh_reload_ok=false
+            fi
         elif [ -n "$ssh_service" ] && command -v service >/dev/null 2>&1; then
-            service "$ssh_service" restart >/dev/null 2>&1 || service "$ssh_service" reload >/dev/null 2>&1 || true
-        else
-            pkill -HUP sshd 2>/dev/null || true
+            if ! service "$ssh_service" restart >/dev/null 2>&1 && \
+               ! service "$ssh_service" reload >/dev/null 2>&1; then
+                ssh_reload_ok=false
+            fi
+        elif ! pkill -HUP sshd 2>/dev/null; then
+            ssh_reload_ok=false
+        fi
+        if [ "$ssh_reload_ok" != "true" ]; then
+            log_error "Failed to reload or restart SSH after configuration update; restoring the prior configuration"
+            if [ -n "$sshd_config_backup" ] && [ -f "$sshd_config_backup" ]; then
+                cp -p "$sshd_config_backup" /etc/ssh/sshd_config
+                if ssh_systemd_socket_activation_enabled && [ -n "$ssh_service" ]; then
+                    systemctl reload "$ssh_service" 2>/dev/null || true
+                elif [ -n "$ssh_service" ] && command -v systemctl >/dev/null 2>&1; then
+                    systemctl restart "$ssh_service" 2>/dev/null || true
+                elif [ -n "$ssh_service" ]; then
+                    service "$ssh_service" restart 2>/dev/null || true
+                fi
+            fi
+            return 1
         fi
 
         # Verify the effective configuration and that the target port is listening.

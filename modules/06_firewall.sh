@@ -11,6 +11,90 @@ firewall_prerequisites() {
     return 0
 }
 
+firewalld_active_interfaces() {
+    local active_zones permanent_zones active_interfaces permanent_interfaces
+    local zone zone_sources zone_interfaces
+    active_zones="$(firewall-cmd --get-active-zones)" || {
+        log_error "Failed to inspect active FirewallD zones"
+        return 1
+    }
+
+    if printf '%s\n' "$active_zones" | awk '/^[[:space:]]*sources:/ && NF > 1 { found = 1 } END { exit !found }'; then
+        log_error "FirewallD source-based zone bindings are unsupported; refusing to leave them outside the drop policy"
+        return 1
+    fi
+
+    permanent_zones="$(firewall-cmd --permanent --get-zones)" || {
+        log_error "Failed to inspect permanent FirewallD zones"
+        return 1
+    }
+    permanent_interfaces=""
+    for zone in $permanent_zones; do
+        if [[ ! "$zone" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            log_error "Unexpected FirewallD zone name; refusing to change zone assignments"
+            return 1
+        fi
+        zone_sources="$(firewall-cmd --permanent --zone="$zone" --list-sources)" || {
+            log_error "Failed to inspect source bindings in FirewallD zone $zone"
+            return 1
+        }
+        if [ -n "$zone_sources" ]; then
+            log_error "FirewallD source-based zone bindings are unsupported; refusing to leave them outside the drop policy"
+            return 1
+        fi
+        zone_interfaces="$(firewall-cmd --permanent --zone="$zone" --list-interfaces)" || {
+            log_error "Failed to inspect interface bindings in FirewallD zone $zone"
+            return 1
+        }
+        permanent_interfaces+="$zone_interfaces"$'\n'
+    done
+    active_interfaces="$(printf '%s\n' "$active_zones" | awk '/^[[:space:]]*interfaces:/ { for (i = 2; i <= NF; i++) print $i }')"
+    printf '%s\n%s\n' "$active_interfaces" "$permanent_interfaces" | awk 'NF' | sort -u
+}
+
+ufw_restore_configuration() {
+    local was_active="$1"
+    if ! restore_tracked_path /etc/ufw; then
+        log_error "Failed to restore the previous UFW configuration"
+        return 1
+    fi
+    if [ "$was_active" = "true" ]; then
+        if ! ufw reload; then
+            log_error "Failed to reload the restored UFW configuration"
+            return 1
+        fi
+    elif ! ufw --force disable; then
+        log_error "Failed to keep UFW disabled after restoring its previous configuration"
+        return 1
+    fi
+}
+
+ufw_abort_configuration() {
+    local reason="$1"
+    local was_active="$2"
+    log_error "$reason"
+    ufw_restore_configuration "$was_active" || log_error "UFW rollback was incomplete"
+    return 1
+}
+
+firewalld_restore_configuration() {
+    if ! restore_tracked_path /etc/firewalld; then
+        log_error "Failed to restore the previous FirewallD configuration"
+        return 1
+    fi
+    if ! firewall-cmd --reload; then
+        log_error "Failed to reload the restored FirewallD configuration"
+        return 1
+    fi
+}
+
+firewalld_abort_configuration() {
+    local reason="$1"
+    log_error "$reason"
+    firewalld_restore_configuration || log_error "FirewallD rollback was incomplete"
+    return 1
+}
+
 firewall_main() {
     log_info "Starting firewall configuration..."
     
@@ -60,27 +144,6 @@ firewall_main() {
         esac
     fi
 
-    # Backup current firewall state if possible
-    case "$firewall_type" in
-        ufw)
-            # UFW doesn't have a simple backup, but we can copy rules
-            cp -r /etc/ufw /etc/ufw.backup.$(date +%s) 2>/dev/null || true
-            ;;
-        firewalld)
-            # Save current runtime configuration to permanent if supported, then backup directory
-            mkdir -p /etc/firewalld.backup.$(date +%s)
-            cp -r /etc/firewalld/* /etc/firewalld.backup.$(date +%s)/ 2>/dev/null || true
-            ;;
-        iptables)
-            # Save current rules
-            iptables-save > /etc/iptables.backup.$(date +%s).rules 2>/dev/null || true
-            ip6tables-save > /etc/ip6tables.backup.$(date +%s).rules 2>/dev/null || true
-            ;;
-        nftables)
-            nft list ruleset > /etc/nftables.backup.$(date +%s).conf 2>/dev/null || true
-            ;;
-    esac
-    
     # Determine what ports to open - use standardized variable names
     local ssh_ports ssh_port http_port https_port
     
@@ -135,17 +198,32 @@ firewall_main() {
             fi
             ;;
         firewalld)
-            if firewall-cmd --state 2>/dev/null | grep -q "running"; then
+            if firewall-cmd --state 2>/dev/null | grep -Fxq "running"; then
                 ssh_ports_allowed=true
+                if [ "$(firewall-cmd --get-default-zone 2>/dev/null)" != "drop" ]; then
+                    ssh_ports_allowed=false
+                fi
                 for configured_ssh_port in $ssh_ports; do
-                    if ! firewall-cmd --list-ports | grep -q "$configured_ssh_port/tcp"; then
+                    if ! firewall-cmd --list-ports --zone=drop | tr ' ' '\n' | grep -Fxq "$configured_ssh_port/tcp"; then
                         ssh_ports_allowed=false
                     fi
                 done
                 if [ "$ssh_ports_allowed" = "true" ] && \
-                   firewall-cmd --list-ports | grep -q "$http_port/tcp" && \
-                   firewall-cmd --list-ports | grep -q "$https_port/tcp"; then
+                   firewall-cmd --list-ports --zone=drop | tr ' ' '\n' | grep -Fxq "$http_port/tcp" && \
+                   firewall-cmd --list-ports --zone=drop | tr ' ' '\n' | grep -Fxq "$https_port/tcp"; then
                     already_configured=true
+                fi
+                if [ "$already_configured" = "true" ]; then
+                    local configured_interfaces configured_iface
+                    configured_interfaces="$(firewalld_active_interfaces)" || return 1
+                    while IFS= read -r configured_iface; do
+                        [ -n "$configured_iface" ] || continue
+                        [ "$configured_iface" = "lo" ] && continue
+                        if [ "$(firewall-cmd --get-zone-of-interface="$configured_iface" 2>/dev/null)" != "drop" ]; then
+                            already_configured=false
+                            break
+                        fi
+                    done <<< "$configured_interfaces"
                 fi
             fi
             ;;
@@ -220,6 +298,10 @@ firewall_main() {
     case "$firewall_type" in
         ufw)
             log_info "Configuring UFW firewall..."
+            if ! backup_file /etc/ufw >/dev/null; then
+                log_error "Failed to back up UFW configuration"
+                return 1
+            fi
             local ufw_was_active=false
             if LC_ALL=C ufw status 2>/dev/null | grep -qiE '^Status:[[:space:]]+active'; then
                 ufw_was_active=true
@@ -236,16 +318,23 @@ firewall_main() {
             
             # Establish the SSH recovery path before restricting inbound traffic.
             for configured_ssh_port in $ssh_ports; do
-                ufw allow "$configured_ssh_port"/tcp comment 'SSH' || return 1
+                ufw allow "$configured_ssh_port"/tcp comment 'SSH' || \
+                    ufw_abort_configuration "Failed to allow SSH port $configured_ssh_port/tcp in UFW" "$ufw_was_active" || return 1
             done
-            ufw default deny incoming || return 1
-            ufw default allow outgoing || return 1
-            ufw allow "$http_port"/tcp comment 'HTTP'
-            ufw allow "$https_port"/tcp comment 'HTTPS'
+            ufw default deny incoming || \
+                ufw_abort_configuration "Failed to set the UFW inbound default policy" "$ufw_was_active" || return 1
+            ufw default allow outgoing || \
+                ufw_abort_configuration "Failed to set the UFW outbound default policy" "$ufw_was_active" || return 1
+            ufw allow "$http_port"/tcp comment 'HTTP' || \
+                ufw_abort_configuration "Failed to allow HTTP in UFW" "$ufw_was_active" || return 1
+            ufw allow "$https_port"/tcp comment 'HTTPS' || \
+                ufw_abort_configuration "Failed to allow HTTPS in UFW" "$ufw_was_active" || return 1
             
             # Allow loopback
-            ufw allow in on lo
-            ufw allow out on lo
+            ufw allow in on lo || \
+                ufw_abort_configuration "Failed to allow inbound loopback traffic in UFW" "$ufw_was_active" || return 1
+            ufw allow out on lo || \
+                ufw_abort_configuration "Failed to allow outbound loopback traffic in UFW" "$ufw_was_active" || return 1
             
             # Additional ports from environment
             if [ -n "$open_additional_ports" ]; then
@@ -253,7 +342,8 @@ firewall_main() {
                 for port in "${PORTS[@]}"; do
                     port=$(echo "$port" | xargs)  # trim
                     if validate_port "$port"; then
-                        ufw allow "$port"/tcp
+                        ufw allow "$port"/tcp || \
+                            ufw_abort_configuration "Failed to allow additional UFW port $port/tcp" "$ufw_was_active" || return 1
                         log_info "Added additional port: $port/tcp"
                     else
                         log_warn "Skipping invalid port: $port"
@@ -264,8 +354,7 @@ firewall_main() {
             # Enable UFW
             if [ "$ufw_was_active" != "true" ]; then
                 if ! printf 'y\n' | ufw enable 2>&1; then
-                    log_error "Failed to enable UFW; leaving it inactive without disabling another firewall"
-                    return 1
+                    ufw_abort_configuration "Failed to enable UFW" "$ufw_was_active" || return 1
                 fi
             fi
             
@@ -275,13 +364,17 @@ firewall_main() {
                 changes_made=true
                 audit "FIREWALL_CONFIGURED" "type=ufw ssh_port=$ssh_port http=$http_port https=$https_port"
             else
-                log_error "Failed to enable UFW"
-                return 1
+                ufw_abort_configuration "UFW is not active after configuration" "$ufw_was_active" || return 1
             fi
             ;;
             
         firewalld)
             log_info "Configuring FirewallD..."
+
+            if ! backup_file /etc/firewalld >/dev/null; then
+                log_error "Failed to back up FirewallD configuration"
+                return 1
+            fi
             
             # Ensure firewalld is installed
             if ! command -v firewall-cmd >/dev/null 2>&1; then
@@ -292,26 +385,62 @@ firewall_main() {
                 fi
             fi
             
-            # Start and enable firewalld
-            systemctl enable --now firewalld 2>/dev/null || true
+            # Do not activate a previously stopped firewall before the SSH
+            # recovery rules are installed; that can drop the current session.
+            if ! firewall-cmd --state 2>/dev/null | grep -Fxq "running"; then
+                log_error "FirewallD is not running; refusing to start it before recovery rules can be installed"
+                log_error "Start FirewallD through a verified out-of-band session, then rerun this module"
+                return 1
+            fi
+            if command -v systemctl >/dev/null 2>&1 && ! systemctl enable firewalld; then
+                log_error "Failed to enable FirewallD at boot"
+                return 1
+            fi
+
+            local active_interfaces active_iface permanent_zone permanent_zone_interfaces required_port
+            active_interfaces="$(firewalld_active_interfaces)" || return 1
             
             # Add runtime and persistent SSH recovery rules before using drop.
             for configured_ssh_port in $ssh_ports; do
-                firewall-cmd --zone=drop --add-port="$configured_ssh_port"/tcp || return 1
-                firewall-cmd --permanent --zone=drop --add-port="$configured_ssh_port"/tcp || return 1
+                firewall-cmd --zone=drop --add-port="$configured_ssh_port"/tcp || \
+                    firewalld_abort_configuration "Failed to add SSH recovery port to FirewallD drop zone" || return 1
+                firewall-cmd --permanent --zone=drop --add-port="$configured_ssh_port"/tcp || \
+                    firewalld_abort_configuration "Failed to persist SSH recovery port in FirewallD drop zone" || return 1
             done
-            firewall-cmd --set-default-zone=drop || return 1
 
-            # Configure the default zone
-            firewall-cmd --permanent --zone=drop --add-service=dhcpv6-client
-            firewall-cmd --permanent --zone=drop --add-source=127.0.0.1/8
-            firewall-cmd --permanent --zone=drop --add-source=::1/128
-            
-            firewall-cmd --permanent --zone=drop --add-port="$http_port"/tcp
-            firewall-cmd --permanent --zone=drop --add-port="$https_port"/tcp
-            
-            # Add loopback interface traffic
-            firewall-cmd --permanent --zone=drop --add-interface=lo
+            firewall-cmd --permanent --zone=drop --add-service=dhcpv6-client || \
+                firewalld_abort_configuration "Failed to configure DHCPv6 client service in FirewallD drop zone" || return 1
+            for required_port in "$http_port" "$https_port"; do
+                firewall-cmd --zone=drop --add-port="$required_port"/tcp || \
+                    firewalld_abort_configuration "Failed to add required port to FirewallD drop zone" || return 1
+                firewall-cmd --permanent --zone=drop --add-port="$required_port"/tcp || \
+                    firewalld_abort_configuration "Failed to persist required port in FirewallD drop zone" || return 1
+            done
+
+            if [ -n "$active_interfaces" ]; then
+                while IFS= read -r active_iface; do
+                    [ -n "$active_iface" ] || continue
+                    [ "$active_iface" = "lo" ] && continue
+                    if [[ ! "$active_iface" =~ ^[A-Za-z0-9_.:@-]+$ ]]; then
+                        firewalld_abort_configuration "Unexpected active FirewallD interface name; refusing to change zones" || return 1
+                    fi
+                    permanent_zone="$(firewall-cmd --permanent --get-zone-of-interface="$active_iface")" || \
+                        firewalld_abort_configuration "Failed to inspect permanent FirewallD zone for $active_iface" || return 1
+                    if [ -n "$permanent_zone" ] && [ "$permanent_zone" != "drop" ]; then
+                        if [[ ! "$permanent_zone" =~ ^[A-Za-z0-9_-]+$ ]]; then
+                            firewalld_abort_configuration "Unexpected permanent FirewallD zone for $active_iface" || return 1
+                        fi
+                        permanent_zone_interfaces="$(firewall-cmd --permanent --zone="$permanent_zone" --list-interfaces)" || \
+                            firewalld_abort_configuration "Failed to inspect permanent zone $permanent_zone for $active_iface" || return 1
+                        if [[ " $permanent_zone_interfaces " == *" $active_iface "* ]] && \
+                           ! firewall-cmd --permanent --zone="$permanent_zone" --remove-interface="$active_iface"; then
+                            firewalld_abort_configuration "Failed to detach $active_iface from its previous permanent FirewallD zone" || return 1
+                        fi
+                    fi
+                    firewall-cmd --permanent --zone=drop --add-interface="$active_iface" || \
+                        firewalld_abort_configuration "Failed to assign $active_iface to the FirewallD drop zone" || return 1
+                done <<< "$active_interfaces"
+            fi
             
             # Additional ports
             if [ -n "$open_additional_ports" ]; then
@@ -319,7 +448,10 @@ firewall_main() {
                 for port in "${PORTS[@]}"; do
                     port=$(echo "$port" | xargs)
                     if validate_port "$port"; then
-                        firewall-cmd --permanent --zone=drop --add-port="$port"/tcp
+                        firewall-cmd --zone=drop --add-port="$port"/tcp || \
+                            firewalld_abort_configuration "Failed to add additional port to FirewallD drop zone" || return 1
+                        firewall-cmd --permanent --zone=drop --add-port="$port"/tcp || \
+                            firewalld_abort_configuration "Failed to persist additional port in FirewallD drop zone" || return 1
                         log_info "Added additional port: $port/tcp"
                     else
                         log_warn "Skipping invalid port: $port"
@@ -327,18 +459,36 @@ firewall_main() {
                 done
             fi
             
+            firewall-cmd --set-default-zone=drop || \
+                firewalld_abort_configuration "Failed to set FirewallD default zone to drop" || return 1
+
             # Reload to apply
-            firewall-cmd --reload
+            firewall-cmd --reload || \
+                firewalld_abort_configuration "Failed to reload FirewallD configuration" || return 1
             
             # Verify
-            if firewall-cmd --state 2>/dev/null | grep -q "running"; then
-                log_info "FirewallD configured and reloaded successfully"
-                changes_made=true
-                audit "FIREWALL_CONFIGURED" "type=firewalld ssh_port=$ssh_port http=$http_port https=$https_port"
-            else
-                log_error "FirewallD is not running"
-                return 1
+            if ! firewall-cmd --state 2>/dev/null | grep -Fxq "running"; then
+                firewalld_abort_configuration "FirewallD is not running after configuration" || return 1
             fi
+            for required_port in "$ssh_ports" "$http_port" "$https_port"; do
+                for configured_ssh_port in $required_port; do
+                    if ! firewall-cmd --list-ports --zone=drop 2>/dev/null | tr ' ' '\n' | grep -Fxq "$configured_ssh_port/tcp"; then
+                        firewalld_abort_configuration "FirewallD drop zone is missing expected port $configured_ssh_port/tcp" || return 1
+                    fi
+                done
+            done
+            if [ -n "$active_interfaces" ]; then
+                while IFS= read -r active_iface; do
+                    [ -n "$active_iface" ] || continue
+                    [ "$active_iface" = "lo" ] && continue
+                    if [ "$(firewall-cmd --get-zone-of-interface="$active_iface" 2>/dev/null)" != "drop" ]; then
+                        firewalld_abort_configuration "Active interface $active_iface is not protected by the FirewallD drop zone" || return 1
+                    fi
+                done <<< "$active_interfaces"
+            fi
+            log_info "FirewallD configured and reloaded successfully"
+            changes_made=true
+            audit "FIREWALL_CONFIGURED" "type=firewalld ssh_port=$ssh_port http=$http_port https=$https_port"
             ;;
             
         iptables)
@@ -467,7 +617,10 @@ firewall_main() {
             local nft_config="/etc/nftables.conf"
             local nft_marker="# Managed by vps-init-setup"
             local nft_rules nft_config_managed=false nft_legacy_managed=false
-            nft_rules="$(nft list ruleset 2>/dev/null || true)"
+            nft_rules="$(nft list ruleset 2>/dev/null)" || {
+                log_error "Failed to inspect the existing nftables ruleset"
+                return 1
+            }
             if [ -f "$nft_config" ] && grep -Fqx "$nft_marker" "$nft_config"; then
                 nft_config_managed=true
             elif [ -f "$nft_config" ] && grep -Fq '# nftables configuration - Generated by VPS Auto-Setup' "$nft_config"; then
@@ -480,8 +633,11 @@ firewall_main() {
                 return 1
             fi
 
-            local nft_candidate
-            nft_candidate=$(mktemp)
+            local nft_candidate nft_apply_candidate
+            nft_candidate="$(mktemp /etc/.nftables.conf.XXXXXX)" || {
+                log_error "Failed to stage nftables configuration"
+                return 1
+            }
             {
                 echo "$nft_marker"
                 echo "# nftables configuration generated by VPS Auto-Setup"
@@ -529,25 +685,56 @@ firewall_main() {
                 echo "}"
             } > "$nft_candidate"
 
-            if ! nft -c -f "$nft_candidate"; then
-                log_error "Generated nftables configuration failed validation"
+            nft_apply_candidate="$(mktemp /etc/.nftables.apply.XXXXXX)" || {
                 rm -f "$nft_candidate"
+                log_error "Failed to stage nftables runtime transaction"
+                return 1
+            }
+            {
+                if [ "$nft_legacy_managed" = "true" ] && nft list table inet filter >/dev/null 2>&1; then
+                    echo "delete table inet filter"
+                fi
+                if nft list table inet vps_init_setup >/dev/null 2>&1; then
+                    echo "delete table inet vps_init_setup"
+                fi
+                cat "$nft_candidate"
+            } > "$nft_apply_candidate" || {
+                rm -f "$nft_candidate" "$nft_apply_candidate"
+                log_error "Failed to stage nftables runtime transaction"
+                return 1
+            }
+
+            if ! nft -c -f "$nft_apply_candidate"; then
+                log_error "Generated nftables configuration failed validation"
+                rm -f "$nft_candidate" "$nft_apply_candidate"
                 return 1
             fi
 
-            backup_file "$nft_config" >/dev/null 2>&1 || true
-            if [ "$nft_legacy_managed" = "true" ]; then
-                nft delete table inet filter 2>/dev/null || true
-            fi
-            nft delete table inet vps_init_setup 2>/dev/null || true
-            if ! nft -f "$nft_candidate"; then
-                log_error "Failed to load validated nftables configuration"
-                rm -f "$nft_candidate"
+            if ! backup_file "$nft_config" >/dev/null; then
+                rm -f "$nft_candidate" "$nft_apply_candidate"
+                log_error "Failed to back up nftables configuration"
                 return 1
             fi
-            install -m 600 "$nft_candidate" "$nft_config"
-            rm -f "$nft_candidate"
-            systemctl enable nftables 2>/dev/null || true
+            if ! chmod 600 "$nft_candidate" || ! mv -f "$nft_candidate" "$nft_config"; then
+                rm -f "$nft_candidate" "$nft_apply_candidate"
+                log_error "Failed to atomically install nftables configuration"
+                return 1
+            fi
+            if command -v systemctl >/dev/null 2>&1 && ! systemctl enable nftables 2>/dev/null; then
+                restore_tracked_path "$nft_config" || \
+                    log_error "Failed to restore nftables configuration"
+                rm -f "$nft_apply_candidate"
+                log_error "Failed to enable nftables persistence"
+                return 1
+            fi
+            if ! nft -f "$nft_apply_candidate"; then
+                restore_tracked_path "$nft_config" || \
+                    log_error "Failed to restore nftables configuration"
+                rm -f "$nft_apply_candidate"
+                log_error "Failed to apply validated nftables transaction"
+                return 1
+            fi
+            rm -f "$nft_apply_candidate"
             
             # Verify
             if nft list ruleset | grep -q "table inet vps_init_setup"; then
@@ -555,6 +742,8 @@ firewall_main() {
                 changes_made=true
                 audit "FIREWALL_CONFIGURED" "type=nftables ssh_port=$ssh_port http=$http_port https=$https_port"
             else
+                restore_tracked_path "$nft_config" || \
+                    log_error "Failed to restore nftables configuration"
                 log_error "Failed to load nftables ruleset"
                 return 1
             fi

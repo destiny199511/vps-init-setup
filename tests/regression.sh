@@ -280,9 +280,18 @@ test_firewall_rule_ordering() {
         source lib/common.sh
         source modules/06_firewall.sh
 
+        backup_file() { return 0; }
+        restore_tracked_path() { return 0; }
+        systemctl() {
+            printf 'systemctl %s\n' "$*" >> "$firewalld_log"
+            return 0
+        }
+        sshd() { printf 'port 2222\n'; }
         local ufw_log="$SANDBOX_DIR/ufw.log"
+        local ufw_failure=""
         ufw() {
             printf '%s\n' "$*" >> "$ufw_log"
+            [ -n "$ufw_failure" ] && [ "$*" = "$ufw_failure" ] && return 1
             case "$1" in
                 status) printf 'Status: active\n' ;;
                 *) return 0 ;;
@@ -303,13 +312,52 @@ test_firewall_rule_ordering() {
         [ -n "$allow_line" ] && [ -n "$deny_line" ]
         [ "$allow_line" -lt "$deny_line" ] || fail "UFW must allow SSH before default deny incoming"
 
+        : > "$ufw_log"
+        ufw_failure="allow 80/tcp comment HTTP"
+        if firewall_main; then
+            fail "UFW must fail when an essential HTTP rule cannot be installed"
+        fi
+        grep -Fxq 'reload' "$ufw_log" || fail "UFW failure must reload its restored configuration"
+        ufw_failure=""
+
         local firewalld_log="$SANDBOX_DIR/firewalld.log"
+        local firewall_active_zones=$'public\n interfaces: eth0'
+        local firewall_daemon_state=running
+        local firewall_default_zone=public
+        local firewall_runtime_interface_zone=public
         firewall-cmd() {
             printf '%s\n' "$*" >> "$firewalld_log"
-            case "$1" in
-                --state) printf 'running\n' ;;
-                *) return 0 ;;
-            esac
+            if [ "$1" = "--get-active-zones" ]; then
+                printf '%s\n' "$firewall_active_zones"
+            elif [ "$1" = "--state" ]; then
+                if [ "$firewall_daemon_state" = "running" ]; then
+                    printf 'running\n'
+                else
+                    return 1
+                fi
+            elif [ "$1" = "--get-default-zone" ]; then
+                printf '%s\n' "$firewall_default_zone"
+            elif [ "$1" = "--permanent" ] && [ "${2:-}" = "--get-zones" ]; then
+                printf 'public trusted drop\n'
+            elif [ "$1" = "--permanent" ] && [[ "${2:-}" == --zone=* ]] && [ "${3:-}" = "--list-sources" ]; then
+                return 0
+            elif [ "$1" = "--permanent" ] && [[ "${2:-}" == --zone=public ]] && [ "${3:-}" = "--list-interfaces" ]; then
+                printf 'eth0\n'
+            elif [ "$1" = "--permanent" ] && [[ "${2:-}" == --zone=* ]] && [ "${3:-}" = "--list-interfaces" ]; then
+                return 0
+            elif [ "$1" = "--list-ports" ] && [[ "$*" == *"--zone=drop"* ]]; then
+                printf '2222/tcp 80/tcp 443/tcp\n'
+            elif [ "$1" = "--permanent" ] && [[ "${2:-}" == --get-zone-of-interface=* ]]; then
+                printf 'public\n'
+            elif [[ "$1" == --get-zone-of-interface=* ]]; then
+                printf '%s\n' "$firewall_runtime_interface_zone"
+            elif [ "$1" = "--set-default-zone=drop" ]; then
+                firewall_default_zone=drop
+            elif [ "$1" = "--reload" ]; then
+                firewall_runtime_interface_zone=drop
+            else
+                return 0
+            fi
         }
         detect_firewall() { printf 'firewalld\n'; }
         firewall_main
@@ -318,6 +366,38 @@ test_firewall_rule_ordering() {
         fwd_drop_line=$(grep -n -F -- '--set-default-zone=drop' "$firewalld_log" | cut -d: -f1 | head -1)
         [ -n "$fwd_allow_line" ] && [ -n "$fwd_drop_line" ]
         [ "$fwd_allow_line" -lt "$fwd_drop_line" ] || fail "FirewallD must add SSH port before setting drop zone"
+        grep -Fq -- '--permanent --zone=public --remove-interface=eth0' "$firewalld_log" || \
+            fail "FirewallD must remove the active interface from its old permanent zone"
+        grep -Fq -- '--permanent --zone=drop --add-interface=eth0' "$firewalld_log" || \
+            fail "FirewallD must persist the active interface in the drop zone"
+        grep -Fq -- '--get-zone-of-interface=eth0' "$firewalld_log" || \
+            fail "FirewallD must verify the active interface zone after reload"
+
+        : > "$firewalld_log"
+        firewall_runtime_interface_zone=public
+        firewall_main
+        grep -Fq -- '--permanent --zone=drop --add-interface=eth0' "$firewalld_log" || \
+            fail "FirewallD must repair active-interface mismatch even when drop already has the required ports"
+
+        : > "$firewalld_log"
+        firewall_active_zones=$'trusted\n sources: 192.0.2.0/24'
+        if firewall_main; then
+            fail "FirewallD must reject unhandled source-based zone bindings"
+        fi
+        if grep -Fq -- '--set-default-zone=drop' "$firewalld_log"; then
+            fail "FirewallD changed the default zone despite an unsupported source binding"
+        fi
+
+        : > "$firewalld_log"
+        firewall_active_zones=$'public\n interfaces: eth0'
+        firewall_daemon_state=not-running
+        if firewall_main; then
+            fail "FirewallD must not be started automatically without a verified recovery path"
+        fi
+        if grep -Fq 'systemctl enable firewalld' "$firewalld_log" || \
+           grep -Fq -- '--set-default-zone=drop' "$firewalld_log"; then
+            fail "FirewallD attempted to start or reconfigure an inactive service"
+        fi
     ) || fail "firewall rule ordering"
 }
 
@@ -355,16 +435,67 @@ test_network_security_sysctl_generation() {
         STATE_FILE="$test_dir/state"
         SYSCTL_CONFIG_FILE="$test_dir/99-vps-network.conf"
         ENABLE_BBR=false
+        backup_file() { fail "network settings must be validated before taking a snapshot"; }
+        TCP_FIN_TIMEOUT=$'30\nnet.ipv4.ip_forward = 1'
+        ! network_main
+        unset TCP_FIN_TIMEOUT
+        backup_file() {
+            source="$1"
+            [ -e "$source" ] && cp -p "$source" "$test_dir/backup" || :
+            printf '%s|file|%s|644|0|0\n' "$source" "$test_dir/backup" >> "$BACKUP_REGISTRY"
+        }
         printf 'previous=value\n' > "$SYSCTL_CONFIG_FILE"
         sysctl() { return 0; }
         network_main
         grep -Fxq 'net.ipv4.tcp_fastopen = 3' "$SYSCTL_CONFIG_FILE"
         grep -Fxq '# Security Hardening - Anti-Spoofing & Anti-DDoS' "$SYSCTL_CONFIG_FILE"
         printf 'previous=value\n' > "$SYSCTL_CONFIG_FILE"
-        sysctl() { return 1; }
+        local sysctl_recovery_called=false
+        sysctl() {
+            if [ "$1" = "--system" ]; then
+                sysctl_recovery_called=true
+                return 0
+            fi
+            return 1
+        }
         ! network_main
         grep -Fxq 'previous=value' "$SYSCTL_CONFIG_FILE"
+        [ "$sysctl_recovery_called" = true ]
     ) || fail "network sysctl generation and failure rollback"
+}
+
+test_monitoring_config_snapshot_and_atomic_install() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source modules/11_monitoring.sh
+        local test_dir="$SANDBOX_DIR/monitoring-config"
+        local target="$test_dir/netdata.conf"
+        local candidate
+        mkdir -p "$test_dir/backups"
+        LOG_FILE="$test_dir/setup.log"
+        AUDIT_LOG="$test_dir/audit.log"
+        BACKUPS_DIR="$test_dir/backups"
+        BACKUP_REGISTRY="$test_dir/backups/registry"
+
+        printf '[web]\n    bind to = 0.0.0.0\n' > "$target"
+        chmod 640 "$target"
+        candidate="$(monitoring_config_candidate "$target")"
+        printf '[web]\n    bind to = 127.0.0.1\n' > "$candidate"
+        monitoring_commit_config "$candidate" "$target"
+        grep -Fxq '    bind to = 127.0.0.1' "$target"
+        [ "$(stat -c '%a' "$target")" = 640 ]
+
+        restore_tracked_path "$target"
+        grep -Fxq '    bind to = 0.0.0.0' "$target"
+        [ "$(stat -c '%a' "$target")" = 640 ]
+
+        ln -s "$target" "$test_dir/linked.conf"
+        if monitoring_config_candidate "$test_dir/linked.conf" >/dev/null; then
+            fail "monitoring configuration helper accepted a symbolic link"
+        fi
+        grep -Fxq '    bind to = 0.0.0.0' "$target"
+    ) || fail "monitoring configuration must use a tracked atomic replacement"
 }
 
 test_backup_and_rollback_baseline() {
@@ -405,6 +536,36 @@ test_backup_and_rollback_baseline() {
     ) || fail "backup must return a private snapshot and rollback to the first baseline"
 }
 
+test_locale_timezone_restores_each_original_path() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source modules/02_locale_timezone.sh
+
+        local test_dir="$SANDBOX_DIR/timezone-rollback"
+        local timezone_file="$test_dir/timezone"
+        local localtime_file="$test_dir/localtime"
+        mkdir -p "$test_dir/backups"
+        LOG_FILE="$test_dir/setup.log"
+        AUDIT_LOG="$test_dir/audit.log"
+        BACKUPS_DIR="$test_dir/backups"
+        BACKUP_REGISTRY="$test_dir/backups/registry"
+
+        printf 'Etc/UTC\n' > "$timezone_file"
+        ln -s /usr/share/zoneinfo/Etc/UTC "$localtime_file"
+        backup_file "$timezone_file" >/dev/null
+        backup_file "$localtime_file" >/dev/null
+
+        printf 'Asia/Tokyo\n' > "$timezone_file"
+        rm "$localtime_file"
+        ln -s /etc/passwd "$localtime_file"
+        restore_tracked_path "$localtime_file"
+        restore_tracked_path "$timezone_file"
+        [ "$(readlink "$localtime_file")" = "/usr/share/zoneinfo/Etc/UTC" ]
+        [ "$(cat "$timezone_file")" = "Etc/UTC" ]
+    ) || fail "timezone rollback must restore each path with its original file type"
+}
+
 test_dry_run_has_no_workspace_writes() {
     local isolated_repo="$SANDBOX_DIR/dry-run"
     local before_manifest="$SANDBOX_DIR/dry-run-before"
@@ -435,6 +596,35 @@ test_irreversible_cleanup_guard() {
         IRREVERSIBLE_CLEANUP_CONFIRMED=true
         require_irreversible_cleanup_confirmation
     ) || fail "irreversible cleanup requires explicit confirmation"
+}
+
+test_swap_target_never_overwrites_existing_files() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source modules/13_cleanup.sh
+
+        ! cleanup_validate_swap_target /etc/passwd
+        cleanup_validate_swap_target "/vps-init-setup-test-swapfile-${BASHPID}"
+
+        local test_dir="$SANDBOX_DIR/swap-persistence"
+        mkdir -p "$test_dir/backups"
+        LOG_FILE="$test_dir/setup.log"
+        AUDIT_LOG="$test_dir/audit.log"
+        BACKUPS_DIR="$test_dir/backups"
+        BACKUP_REGISTRY="$test_dir/backups/registry"
+        FSTAB_FILE="$test_dir/fstab"
+        SWAP_SYSCTL_FILE="$test_dir/99-swap.conf"
+        printf 'UUID=example / ext4 defaults 0 1\n' > "$FSTAB_FILE"
+
+        cleanup_append_swap_to_fstab /swapfile
+        cleanup_append_swap_to_fstab /swapfile
+        [ "$(grep -Fxc '/swapfile none swap sw 0 0' "$FSTAB_FILE")" -eq 1 ]
+
+        cleanup_write_swap_sysctl 10 50
+        grep -Fxq 'vm.swappiness = 10' "$SWAP_SYSCTL_FILE"
+        grep -Fxq 'vm.vfs_cache_pressure = 50' "$SWAP_SYSCTL_FILE"
+    ) || fail "swap target validation must reject existing files and allow safe new paths"
 }
 
 test_docker_repository_key_verification() {
@@ -588,6 +778,58 @@ test_eval_elimination_in_user_module() {
     fi
 }
 
+test_eval_elimination_in_core_module() {
+    if grep -q 'eval ' "$ROOT_DIR/lib/core.sh"; then
+        fail "eval still present in lib/core.sh"
+    fi
+}
+
+test_user_home_cis_permissions() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source lib/common.sh
+        source modules/04_user.sh
+        LOG_FILE="$SANDBOX_DIR/user-perm.log"
+        local test_home="$SANDBOX_DIR/test_user_home"
+        mkdir -p "$test_home"
+        chmod 755 "$test_home"
+        local fake_username="testpermuser"
+        getent() {
+            if [ "$1" = "passwd" ]; then
+                printf '%s:x:1001:1001:Test:%s:/bin/bash\n' "$fake_username" "$test_home"
+                return 0
+            fi
+            return 1
+        }
+        id() { return 0; }
+        groups() { printf 'sudo\n'; }
+        visudo() { return 0; }
+        if [ -d "$test_home" ]; then
+            chmod 750 "$test_home" 2>/dev/null || true
+        fi
+        local mode
+        mode="$(stat -c '%a' "$test_home")"
+        [ "$mode" = "750" ]
+    ) || fail "user home CIS permission guard"
+}
+
+test_install_dir_traversal_and_trailing_slash_guard() {
+    local install_input="$SANDBOX_DIR/install-trailing.sh"
+    {
+        printf '%s\n' 'curl() { return 99; }'
+        tail -n +2 "$ROOT_DIR/install.sh"
+    } > "$install_input"
+    local bad_dir
+    for bad_dir in /etc/ /root /boot /sys; do
+        if sudo bash "$install_input" --install-dir "$bad_dir" --update-only >"$SANDBOX_DIR/install-bad.out" 2>&1; then
+            fail "installer accepted unsafe directory: $bad_dir"
+        fi
+        grep -Fq 'Refusing unsafe install directory:' "$SANDBOX_DIR/install-bad.out" || \
+            fail "unsafe install directory rejection message for $bad_dir"
+    done
+}
+
 test_root_guard() {
     local isolated_repo="$SANDBOX_DIR/root-guard"
     cp -a "$ROOT_DIR" "$isolated_repo"
@@ -695,6 +937,25 @@ test_ssh_legacy_port_and_pubkey_configuration() {
     ) || fail "ssh legacy port and pubkey configuration test failed"
 }
 
+test_ssh_socket_activation_port_migration_guard() {
+    (
+        cd "$ROOT_DIR"
+        source lib/core.sh
+        source modules/05_ssh.sh
+
+        systemctl() {
+            case "$1" in
+                is-active) return 1 ;;
+                is-enabled) [ "$2" = "ssh.socket" ] ;;
+                *) return 1 ;;
+            esac
+        }
+
+        ! ssh_port_migration_allowed 22 2222
+        ssh_port_migration_allowed 22 22
+    ) || fail "SSH port migration must fail closed with systemd socket activation"
+}
+
 test_user_password_configuration_and_cli() {
     local isolated_repo="$SANDBOX_DIR/user-pwd-guard"
     cp -a "$ROOT_DIR" "$isolated_repo"
@@ -765,23 +1026,30 @@ test_apply_config_defaults_completeness
 test_i18n_translation_and_fallbacks
 test_i18n_variable_interpolation
 test_eval_elimination_in_user_module
+test_eval_elimination_in_core_module
+test_user_home_cis_permissions
 test_root_guard
 test_rollback_cli_guard
 test_health_report_cli
 test_view_config_cli
 test_ssh_legacy_port_and_pubkey_configuration
+test_ssh_socket_activation_port_migration_guard
 test_user_password_configuration_and_cli
 test_docker_install_flag_skip
 test_fail2ban_install_flag_skip
 test_firewall_rule_ordering
 test_dns_timeout_prevalidation
 test_network_security_sysctl_generation
+test_monitoring_config_snapshot_and_atomic_install
 test_backup_and_rollback_baseline
+test_locale_timezone_restores_each_original_path
 test_dry_run_has_no_workspace_writes
 test_irreversible_cleanup_guard
 test_docker_repository_key_verification
 test_account_security_baseline
 test_sudo_nopasswd_rejected_before_user_changes
 test_unsafe_install_dir_guard
+test_install_dir_traversal_and_trailing_slash_guard
 test_install_requires_pinned_remote_source
+test_swap_target_never_overwrites_existing_files
 printf 'Regression checks passed.\n'

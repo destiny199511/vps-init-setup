@@ -13,13 +13,19 @@ network_prerequisites() {
 
 restore_sysctl_config() {
     local sysctl_config="$1"
-    local sysctl_backup="$2"
-    local had_sysctl_config="$3"
+    restore_tracked_path "$sysctl_config"
+}
 
-    if [ "$had_sysctl_config" = "true" ] && [ -n "$sysctl_backup" ] && [ -f "$sysctl_backup" ]; then
-        cp -p "$sysctl_backup" "$sysctl_config"
-    else
-        rm -f "$sysctl_config"
+network_validate_integer() {
+    local name="$1"
+    local value="$2"
+    local minimum="$3"
+    local maximum="$4"
+
+    if [[ ! "$value" =~ ^[0-9]{1,10}$ ]] || \
+       (( 10#$value < minimum || 10#$value > maximum )); then
+        log_error "$name must be an integer between $minimum and $maximum"
+        return 1
     fi
 }
 
@@ -49,16 +55,39 @@ network_main() {
     local somaxconn="${SOMAXCONN:-65535}"
     local enable_bbr="${ENABLE_BBR:-true}"
     local sysctl_config="${SYSCTL_CONFIG_FILE:-/etc/sysctl.d/99-vps-network.conf}"
-    local sysctl_dir sysctl_candidate sysctl_backup="" had_sysctl_config=false
+    local sysctl_dir sysctl_candidate
     sysctl_dir="$(dirname "$sysctl_config")"
 
-    # Backup current sysctl config
-    if [ -e "$sysctl_config" ] || [ -L "$sysctl_config" ]; then
-        had_sysctl_config=true
-        sysctl_backup="$(backup_file "$sysctl_config")" || {
-            log_error "Failed to back up existing sysctl configuration: $sysctl_config"
+    case "$ip_forward" in
+        0|1) ;;
+        *)
+            log_error "IP_FORWARD must be 0 or 1"
             return 1
-        }
+            ;;
+    esac
+    case "$enable_bbr" in
+        true|false) ;;
+        *)
+            log_error "ENABLE_BBR must be true or false: $enable_bbr"
+            return 1
+            ;;
+    esac
+    network_validate_integer TCP_FIN_TIMEOUT "$tcp_fin_timeout" 1 2147483647 || return 1
+    network_validate_integer TCP_KEEPALIVE_TIME "$tcp_keepalive_time" 1 2147483647 || return 1
+    network_validate_integer TCP_KEEPALIVE_INTVL "$tcp_keepalive_intvl" 1 2147483647 || return 1
+    network_validate_integer TCP_KEEPALIVE_PROBES "$tcp_keepalive_probes" 1 255 || return 1
+    network_validate_integer TCP_MAX_SYN_BACKLOG "$tcp_max_syn_backlog" 1 2147483647 || return 1
+    network_validate_integer TCP_TW_REUSE "$tcp_tw_reuse" 0 1 || return 1
+    network_validate_integer TCP_MAX_TW_BUCKETS "$tcp_max_tw_buckets" 1 2147483647 || return 1
+    network_validate_integer TCP_SYNCOOKIES "$tcp_syncookies" 0 1 || return 1
+    network_validate_integer TCP_FASTOPEN "$tcp_fastopen" 0 7 || return 1
+    network_validate_integer NETDEV_MAX_BACKLOG "$netdev_max_backlog" 1 2147483647 || return 1
+    network_validate_integer SOMAXCONN "$somaxconn" 1 2147483647 || return 1
+
+    # Backup current sysctl config
+    if ! backup_file "$sysctl_config" >/dev/null; then
+        log_error "Failed to back up sysctl configuration: $sysctl_config"
+        return 1
     fi
     sysctl_candidate="$(mktemp "${sysctl_dir}/.$(basename "$sysctl_config").XXXXXX")" || {
         log_error "Failed to create temporary sysctl configuration"
@@ -121,7 +150,7 @@ network_main() {
         log_info "Enabling BBR congestion control..."
         modprobe tcp_bbr 2>/dev/null || true
     fi
-    if ! install -m 644 "$sysctl_candidate" "$sysctl_config"; then
+    if ! chmod 644 "$sysctl_candidate" || ! mv -f "$sysctl_candidate" "$sysctl_config"; then
         rm -f "$sysctl_candidate"
         log_error "Failed to install sysctl configuration: $sysctl_config"
         return 1
@@ -129,7 +158,12 @@ network_main() {
     rm -f "$sysctl_candidate"
     if ! sysctl -p "$sysctl_config" >/dev/null 2>&1; then
         log_error "Failed to apply sysctl configuration; restoring the previous file"
-        restore_sysctl_config "$sysctl_config" "$sysctl_backup" "$had_sysctl_config"
+        if ! restore_sysctl_config "$sysctl_config"; then
+            log_error "Failed to restore sysctl configuration snapshot: $sysctl_config"
+        fi
+        if ! sysctl --system >/dev/null 2>&1; then
+            log_error "Failed to reapply the restored sysctl configuration set; runtime kernel values may need manual review"
+        fi
         return 1
     fi
 

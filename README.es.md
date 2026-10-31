@@ -41,6 +41,9 @@ sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256"
 
 > 💡 **Verificación de Release**: Cada Release incluye `source-commit.txt`, manifiestos SHA-256 y atestados de procedencia de GitHub (verificables mediante `gh attestation verify`).
 > ⚠️ **Prevención de Bloqueo**: Mantén abierta tu sesión SSH actual antes de cambiar puertos o reglas del firewall. Comprueba la conexión en una nueva terminal antes de desconectar.
+> Si se detecta la activación por socket de SSH en systemd, el script rechazará migrar el puerto SSH automáticamente; migra y verifica la unidad de socket previamente.
+> La creación de Swap rechazará sobrescribir cualquier archivo existente; el directorio padre de `SWAP_FILE` debe existir, pertenecer a root y no tener permisos de escritura para grupo u otros.
+> La configuración de FirewallD vinculará las interfaces a la zona `drop`; si se detectan asignaciones basadas en origen o FirewallD no está en ejecución, el script se detendrá para evitar bloqueos. Inicia FirewallD con una sesión fuera de banda verificada antes de continuar.
 
 ## Configuración
 

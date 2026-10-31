@@ -35,9 +35,11 @@ fail2ban_main() {
     fi
     
     # Backup existing configuration
-    local fail2ban_backup
-    fail2ban_backup=$(backup_file "/etc/fail2ban/jail.local") || true
-    fail2ban_backup=$(backup_file "/etc/fail2ban/jail.d") || true
+    if ! backup_file "/etc/fail2ban/jail.local" >/dev/null || \
+       ! backup_file "/etc/fail2ban/jail.d" >/dev/null; then
+        log_error "Failed to back up Fail2ban configuration; no changes were made"
+        return 1
+    fi
     
     # Get every effective SSH port, including a legacy port kept during migration.
     local ssh_ports ssh_port

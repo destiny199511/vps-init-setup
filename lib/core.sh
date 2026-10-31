@@ -339,40 +339,104 @@ wait_for_apt_lock() {
     return 0
 }
 
-# install_pkg: 跨发行版安装软件包
-install_pkg() {
-    local pkg="$1"
-    log_info "$(t '安装软件包: ${pkg}')"
-    wait_for_apt_lock || return 1
-    if [[ "${PKG_UPDATE}" ]]; then
-        eval "${PKG_UPDATE}" || true
-    fi
-    eval "${PKG_INSTALL} ${pkg}" || die "$(t '软件包安装失败: ${pkg}')"
-    audit "PKG_INSTALL" "${pkg}"
-}
-
-# 兼容模块使用的旧安装接口
-install_package() {
-    local package_name
-    for package_name in "$@"; do
-        install_pkg "$package_name"
-    done
-}
+# install_package: 跨发行版安装软件包（支持批量安装，无 eval，具备缓存防抖）
+_PKG_CACHE_INITIALIZED=false
 
 apt_update() {
     wait_for_apt_lock || return 1
-    if [[ -n "${PKG_UPDATE:-}" ]]; then
-        eval "${PKG_UPDATE}"
-    fi
+    [ -n "${PKG_MGR:-}" ] || detect_pkg_manager >/dev/null
+    case "${PKG_MGR:-}" in
+        apt)
+            DEBIAN_FRONTEND=noninteractive apt-get update -qq
+            ;;
+        dnf|yum)
+            "${PKG_MGR}" check-update -q || true
+            ;;
+        zypper)
+            zypper refresh
+            ;;
+        pacman)
+            pacman -Sy
+            ;;
+        apk)
+            apk update
+            ;;
+        *)
+            if [[ -n "${PKG_UPDATE:-}" ]]; then
+                ${PKG_UPDATE}
+            fi
+            ;;
+    esac
+    _PKG_CACHE_INITIALIZED=true
 }
 
-# remove_pkg: 跨发行版卸载软件包
-remove_pkg() {
-    local pkg="$1"
-    log_info "$(t '卸载软件包: ${pkg}')"
+install_package() {
+    [ $# -gt 0 ] || return 0
     wait_for_apt_lock || return 1
-    eval "${PKG_REMOVE} ${pkg}" || true
-    audit "PKG_REMOVE" "${pkg}"
+    [ -n "${PKG_MGR:-}" ] || detect_pkg_manager >/dev/null
+
+    if [ "${_PKG_CACHE_INITIALIZED:-false}" != "true" ]; then
+        apt_update || true
+    fi
+
+    log_info "$(t '安装软件包: ')$*"
+    case "${PKG_MGR:-}" in
+        apt)
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" || die "$(t '软件包安装失败: ')$*"
+            ;;
+        dnf|yum)
+            "${PKG_MGR}" install -y -q "$@" || die "$(t '软件包安装失败: ')$*"
+            ;;
+        zypper)
+            zypper install -y "$@" || die "$(t '软件包安装失败: ')$*"
+            ;;
+        pacman)
+            pacman -S --noconfirm "$@" || die "$(t '软件包安装失败: ')$*"
+            ;;
+        apk)
+            apk add "$@" || die "$(t '软件包安装失败: ')$*"
+            ;;
+        *)
+            die "$(t '不支持的包管理器')"
+            ;;
+    esac
+    local pkg_item
+    for pkg_item in "$@"; do
+        audit "PKG_INSTALL" "${pkg_item}"
+    done
+}
+
+install_pkg() {
+    install_package "$1"
+}
+
+# remove_pkg: 跨发行版卸载软件包（无 eval）
+remove_pkg() {
+    [ $# -gt 0 ] || return 0
+    wait_for_apt_lock || return 1
+    [ -n "${PKG_MGR:-}" ] || detect_pkg_manager >/dev/null
+    log_info "$(t '卸载软件包: ')$*"
+    case "${PKG_MGR:-}" in
+        apt)
+            DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "$@" || true
+            ;;
+        dnf|yum)
+            "${PKG_MGR}" remove -y -q "$@" || true
+            ;;
+        zypper)
+            zypper remove -y "$@" || true
+            ;;
+        pacman)
+            pacman -Rs --noconfirm "$@" || true
+            ;;
+        apk)
+            apk del "$@" || true
+            ;;
+    esac
+    local pkg_item
+    for pkg_item in "$@"; do
+        audit "PKG_REMOVE" "${pkg_item}"
+    done
 }
 
 # command_exists: 命令是否存在
@@ -613,6 +677,15 @@ rollback_record() {
             cp -a "$kind" "$src" || return 1
             ;;
     esac
+}
+
+restore_tracked_path() {
+    local src="$1"
+    local record kind snapshot mode owner group
+
+    record="$(backup_record_for "$src")" || return 1
+    IFS='|' read -r _ kind snapshot mode owner group <<< "$record"
+    rollback_record "$src" "$kind" "$snapshot" "$mode" "$owner" "$group"
 }
 
 # rollback_all: Restores the first pre-change snapshot for every tracked path

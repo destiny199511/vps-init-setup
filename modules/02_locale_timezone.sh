@@ -110,9 +110,11 @@ locale_timezone_main() {
         log_info "Setting locale to: $target_locale"
         
         # Backup locale configuration
-        local locale_backup
-        locale_backup=$(backup_file "/etc/default/locale") || true
-        locale_backup=$(backup_file "/etc/locale.conf") || true
+        if ! backup_file "/etc/default/locale" >/dev/null || \
+           ! backup_file "/etc/locale.conf" >/dev/null; then
+            log_error "Failed to back up locale configuration; no locale changes were made"
+            return 1
+        fi
         
         # Generate locale
         log_info "Generating locale: $target_locale"
@@ -139,7 +141,10 @@ locale_timezone_main() {
                 fi
                 # Explicitly enable the requested locale before generation.
                 if [ -f /etc/locale.gen ]; then
-                    backup_file /etc/locale.gen >/dev/null 2>&1 || true
+                    if ! backup_file /etc/locale.gen >/dev/null; then
+                        log_error "Failed to back up /etc/locale.gen; locale configuration was not changed"
+                        return 1
+                    fi
                     if grep -qiE "^[# ]*${target_locale//./\\.}([[:space:]]|$)" /etc/locale.gen; then
                         sed -i -E "s/^[# ]*(${target_locale//./\\.}([[:space:]].*)?)$/\\1/" /etc/locale.gen
                     else
@@ -227,9 +232,11 @@ locale_timezone_main() {
         log_info "Setting timezone to: $target_timezone"
         
         # Backup timezone configuration
-        local tz_backup
-        tz_backup=$(backup_file "/etc/timezone") || true
-        tz_backup=$(backup_file "/etc/localtime") || true
+        if ! backup_file "/etc/timezone" >/dev/null || \
+           ! backup_file "/etc/localtime" >/dev/null; then
+            log_error "Failed to back up timezone configuration; no timezone changes were made"
+            return 1
+        fi
         
         # Set timezone
         case "$(detect_init_system)" in
@@ -263,14 +270,11 @@ locale_timezone_main() {
             log_error "Failed to set timezone. Current: $new_timezone, Expected: $target_timezone"
             
             # Attempt rollback
-            if [ -n "$tz_backup" ] && [ -f "$tz_backup" ]; then
-                if [ -f "/etc/localtime" ]; then
-                    cp -p "$tz_backup" /etc/localtime
-                fi
-                if [ -f "/etc/timezone" ]; then
-                    cp -p "$tz_backup" /etc/timezone
-                fi
+            if restore_tracked_path "/etc/localtime" && \
+               restore_tracked_path "/etc/timezone"; then
                 log_info "Rolled back timezone configuration"
+            else
+                log_error "Timezone rollback was incomplete; inspect the active transaction snapshot"
             fi
             
             return 1

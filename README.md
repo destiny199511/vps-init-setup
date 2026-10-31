@@ -41,6 +41,9 @@ sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256"
 
 > 💡 **版本校验**：每个 Release 附带 `source-commit.txt`、SHA-256 清单与 GitHub 构建来源签名证明（可用 `gh attestation verify` 检验）。
 > ⚠️ **防失联提醒**：修改 SSH 端口或防火墙前，请保持当前连接。装机完成后，先在新终端验证登录成功，再断开旧终端。
+> 若检测到 systemd SSH socket activation，脚本会拒绝自动迁移 SSH 端口，避免停止 socket 后无法恢复监听；请先单独完成并验证 socket 单元迁移。
+> Swap 创建会拒绝覆盖任何已存在的目标文件；自定义 `SWAP_FILE` 的父目录必须已存在、由 root 所有且不可被组或其他用户写入。
+> FirewallD 配置会将活动及持久接口绑定到 `drop` zone；如果检测到基于来源地址的 zone 绑定，或 FirewallD 尚未运行，脚本会拒绝继续，避免误报生效或在未装入 SSH 恢复规则前启动防火墙。执行前请通过已验证的带外会话启动 FirewallD，并确认旧 zone 中除 SSH、HTTP、HTTPS 和显式附加端口外没有仍需开放的服务。
 
 ## 配置方式
 

@@ -17,6 +17,7 @@ write_sudoers_rule() {
     local target="/etc/sudoers.d/$username"
     local candidate
 
+    mkdir -p -m 750 /etc/sudoers.d 2>/dev/null || true
     candidate="$(mktemp "/etc/sudoers.d/.${username}.XXXXXX")" || return 1
     printf '%s\n' "$rule" > "$candidate"
     chmod 440 "$candidate"
@@ -151,6 +152,9 @@ user_main() {
         local user_home user_ssh_dir authorized_keys
         user_home="$(getent passwd "$username" | cut -d: -f6)"
         [ -z "$user_home" ] && user_home="/home/$username"
+        if [ -d "$user_home" ]; then
+            chmod 750 "$user_home" 2>/dev/null || true
+        fi
         user_ssh_dir="$user_home/.ssh"
         authorized_keys="$user_ssh_dir/authorized_keys"
         
@@ -302,13 +306,16 @@ user_main() {
         local final_home
         final_home="$(getent passwd "$username" | cut -d: -f6)"
         [ -z "$final_home" ] && final_home="/home/$username"
+        if [ -d "$final_home" ]; then
+            chmod 750 "$final_home" 2>/dev/null || true
+        fi
         log_info "User '$username' configured successfully"
         log_info "UID: $(id -u "$username"), GID: $(id -g "$username")"
         log_info "Home: $final_home"
         if groups "$username" | grep -qE '\<(sudo|wheel)\>'; then
             log_info "Has sudo privileges"
         fi
-        if [ -f "/home/$username/.ssh/authorized_keys" ]; then
+        if [ -f "$final_home/.ssh/authorized_keys" ]; then
             log_info "SSH key authentication configured"
         fi
         

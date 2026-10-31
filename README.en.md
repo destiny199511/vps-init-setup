@@ -41,6 +41,9 @@ sudo bash install.sh --ref "$VPS_COMMIT" --sha256 "$ARCHIVE_SHA256"
 
 > 💡 **Release Verification**: Releases publish `source-commit.txt`, SHA-256 manifests, and GitHub build provenance attestations (verifiable via `gh attestation verify`).
 > ⚠️ **Anti-Lockout Notice**: Keep your active SSH session open before modifying SSH ports or firewall rules. Verify login in a new terminal before disconnecting.
+> If systemd SSH socket activation is detected, the script will refuse to migrate SSH ports automatically to prevent socket shutdown without listener recovery; complete and verify socket unit migration separately beforehand.
+> Swap creation will refuse to overwrite any existing target path; custom `SWAP_FILE` parent directory must already exist, be owned by root, and not be group- or world-writable.
+> FirewallD configuration binds active and permanent interfaces to the `drop` zone; if source-based zone bindings are detected or FirewallD is not running, the script refuses to proceed to prevent false positives or starting firewall before SSH recovery rules are in place. Start FirewallD in a verified out-of-band session and verify old zones before running.
 
 ## Configuration
 

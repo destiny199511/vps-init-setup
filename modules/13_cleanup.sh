@@ -22,6 +22,102 @@ cleanup_prerequisites() {
     return 0
 }
 
+cleanup_validate_swap_target() {
+    local swap_file="$1"
+    local parent_dir canonical_parent parent_owner parent_mode
+
+    if [[ ! "$swap_file" =~ ^/[A-Za-z0-9._/-]+$ ]] || [[ "$swap_file" == "/" ]] || \
+       [[ "$swap_file" == *"/../"* ]] || [[ "$swap_file" == */.. ]]; then
+        log_error "SWAP_FILE must be a safe absolute path without parent traversal: $swap_file"
+        return 1
+    fi
+
+    parent_dir="$(dirname "$swap_file")"
+    if [ ! -d "$parent_dir" ] || [ -L "$parent_dir" ]; then
+        log_error "Swap file parent directory must exist and must not be a symlink: $parent_dir"
+        return 1
+    fi
+    canonical_parent="$(realpath -e "$parent_dir" 2>/dev/null)" || {
+        log_error "Unable to resolve swap file parent directory: $parent_dir"
+        return 1
+    }
+    if [ "$canonical_parent" != "$parent_dir" ]; then
+        log_error "Swap file path must not traverse symlinked directories: $parent_dir"
+        return 1
+    fi
+    parent_owner="$(stat -c '%u' "$parent_dir" 2>/dev/null)" || return 1
+    parent_mode="$(stat -c '%a' "$parent_dir" 2>/dev/null)" || return 1
+    if [ "$parent_owner" != "0" ] || (( (8#$parent_mode) & 022 )); then
+        log_error "Swap file parent directory must be root-owned and not group/world writable: $parent_dir"
+        return 1
+    fi
+    if [ -e "$swap_file" ] || [ -L "$swap_file" ]; then
+        log_error "Refusing to overwrite an existing swap target: $swap_file"
+        return 1
+    fi
+    return 0
+}
+
+cleanup_append_swap_to_fstab() {
+    local swap_file="$1"
+    local fstab_file="${FSTAB_FILE:-/etc/fstab}"
+    local candidate
+
+    if [ -L "$fstab_file" ] || [ ! -f "$fstab_file" ]; then
+        log_error "Refusing to update a missing or symlinked fstab file: $fstab_file"
+        return 1
+    fi
+    if awk -v path="$swap_file" '$1 == path && $3 == "swap" {found=1} END {exit !found}' "$fstab_file"; then
+        return 0
+    fi
+    backup_file "$fstab_file" >/dev/null || {
+        log_error "Failed to back up $fstab_file; swap persistence was not changed"
+        return 1
+    }
+
+    candidate="$(mktemp "$(dirname "$fstab_file")/.fstab.XXXXXX")" || return 1
+    if ! cp -p "$fstab_file" "$candidate" || \
+       ! printf '%s none swap sw 0 0\n' "$swap_file" >> "$candidate" || \
+       ! mv -f "$candidate" "$fstab_file"; then
+        rm -f "$candidate"
+        log_error "Failed to atomically add the swap entry to $fstab_file"
+        return 1
+    fi
+}
+
+cleanup_write_swap_sysctl() {
+    local swappiness="$1"
+    local vfs_cache_pressure="$2"
+    local sysctl_file="${SWAP_SYSCTL_FILE:-/etc/sysctl.d/99-swap.conf}"
+    local candidate
+
+    [ -d "$(dirname "$sysctl_file")" ] || return 0
+    if [ -L "$sysctl_file" ]; then
+        log_error "Refusing to overwrite symlinked swap sysctl configuration: $sysctl_file"
+        return 1
+    fi
+    backup_file "$sysctl_file" >/dev/null || {
+        log_error "Failed to back up $sysctl_file; swap sysctl configuration was not changed"
+        return 1
+    }
+    candidate="$(mktemp "$(dirname "$sysctl_file")/.$(basename "$sysctl_file").XXXXXX")" || return 1
+    if ! printf 'vm.swappiness = %s\nvm.vfs_cache_pressure = %s\n' \
+        "$swappiness" "$vfs_cache_pressure" > "$candidate" || \
+       ! chmod 644 "$candidate" || ! mv -f "$candidate" "$sysctl_file"; then
+        rm -f "$candidate"
+        log_error "Failed to atomically write swap sysctl configuration: $sysctl_file"
+        return 1
+    fi
+    return 0
+}
+
+cleanup_discard_new_swap() {
+    local swap_file="$1"
+
+    swapoff "$swap_file" 2>/dev/null || true
+    rm -f -- "$swap_file"
+}
+
 require_irreversible_cleanup_confirmation() {
     if [ "${IRREVERSIBLE_CLEANUP_CONFIRMED:-false}" = "true" ]; then
         return 0
@@ -55,6 +151,10 @@ cleanup_main() {
         if [[ $swap_mb -gt 0 ]]; then
             log_info "Swap already exists (${swap_mb}MB), skipping creation"
         else
+            if ! cleanup_validate_swap_target "$swap_file"; then
+                return 1
+            fi
+
             # Auto-calculate swap size if not specified
             if [[ -z "$swap_size" ]]; then
                 if [[ $ram_mb -le 2048 ]]; then
@@ -66,7 +166,23 @@ cleanup_main() {
                 fi
             fi
 
+            local swappiness="${SWAPPINESS:-10}"
+            local vfs_cache_pressure="${VFS_CACHE_PRESSURE:-50}"
+            if [[ ! "$swappiness" =~ ^[0-9]{1,3}$ ]] || [ "$swappiness" -gt 100 ]; then
+                log_error "SWAPPINESS must be an integer between 0 and 100: $swappiness"
+                return 1
+            fi
+            if [[ ! "$vfs_cache_pressure" =~ ^[0-9]{1,4}$ ]] || [ "$vfs_cache_pressure" -gt 1000 ]; then
+                log_error "VFS_CACHE_PRESSURE must be an integer between 0 and 1000: $vfs_cache_pressure"
+                return 1
+            fi
+
             log_info "Creating swap file: ${swap_file} (${swap_size})"
+
+            if [[ ! "$swap_size" =~ ^[1-9][0-9]{0,5}[KMGkmg]?$ ]]; then
+                log_error "SWAP_SIZE must be a positive integer with an optional K, M, or G suffix: $swap_size"
+                return 1
+            fi
 
             # Check available disk space
             local avail_mb
@@ -99,28 +215,22 @@ cleanup_main() {
                         log_info "Swap activated: ${swap_file} (${swap_size})"
 
                         # Add to fstab for persistence
-                        if ! grep -q "$swap_file" /etc/fstab 2>/dev/null; then
-                            backup_file /etc/fstab
-                            echo "$swap_file none swap sw 0 0" >> /etc/fstab
-                            audit "SWAP_CREATE" "${swap_file} ${swap_size}"
-                            log_info "Swap added to /etc/fstab for persistence"
+                        if ! cleanup_append_swap_to_fstab "$swap_file"; then
+                            cleanup_discard_new_swap "$swap_file"
+                            return 1
                         fi
 
                         # Optimize swappiness (lower = less swap usage, better for VPS)
-                        local swappiness="${SWAPPINESS:-10}"
-                        local vfs_cache_pressure="${VFS_CACHE_PRESSURE:-50}"
+                        # Persist sysctl settings
+                        if ! cleanup_write_swap_sysctl "$swappiness" "$vfs_cache_pressure"; then
+                            cleanup_discard_new_swap "$swap_file"
+                            return 1
+                        fi
                         sysctl -w vm.swappiness="$swappiness" 2>/dev/null || true
                         sysctl -w vm.vfs_cache_pressure="$vfs_cache_pressure" 2>/dev/null || true
-
-                        # Persist sysctl settings
-                        if [[ -d /etc/sysctl.d ]]; then
-                            cat > /etc/sysctl.d/99-swap.conf << EOF
-vm.swappiness = $swappiness
-vm.vfs_cache_pressure = $vfs_cache_pressure
-EOF
-                            audit "SYSCTL_SET" "vm.swappiness=$swappiness vm.vfs_cache_pressure=$vfs_cache_pressure"
-                            log_info "Swappiness set to ${swappiness}, vfs_cache_pressure set to ${vfs_cache_pressure}"
-                        fi
+                        audit "SWAP_CREATE" "${swap_file} ${swap_size}"
+                        audit "SYSCTL_SET" "vm.swappiness=$swappiness vm.vfs_cache_pressure=$vfs_cache_pressure"
+                        log_info "Swap added to /etc/fstab and swappiness configured"
                     else
                         log_error "Failed to enable swap (swapon failed)"
                         rm -f "$swap_file"
